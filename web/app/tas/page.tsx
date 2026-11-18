@@ -2,17 +2,18 @@
 
 import { useEffect, useState } from "react";
 
+import { ErrorText } from "@/components/ui/error-text";
 import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/table";
 import { api, type TA } from "@/lib/api";
 
 /** Add-ons Parsemaxxing promoted, with their versions (read-only). */
 export default function Registry() {
   const [tas, setTas] = useState<TA[] | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | Error>("");
   useEffect(() => {
     api<TA[]>("/tas")
       .then(setTas)
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => setError(e));
   }, []);
   return (
     <div className="grid gap-4">
@@ -22,7 +23,7 @@ export default function Registry() {
       </div>
       {error && (
         <p role="alert" className="text-sm text-bad">
-          {error}
+          <ErrorText error={error} />
         </p>
       )}
       <section className="glass overflow-hidden">

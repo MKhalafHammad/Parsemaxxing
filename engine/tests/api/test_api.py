@@ -383,3 +383,68 @@ def test_an_ai_hint_never_counts_as_a_stated_timezone(client, pg):
 def test_an_uploaded_manifest_is_labelled_as_uploaded(client, pg):
     job = upload(client).json()["job"]  # the fixture's manifest, sent with the upload
     assert pg.get(job)["form"]["validation"] == "uploaded"
+
+
+# --- error envelope and request ids (design 7.7 A10) ------------------------------------------
+
+
+def _envelope(r, status, code):
+    body = r.json()
+    assert r.status_code == status, r.text
+    assert body["error"]["code"] == code
+    assert body["error"]["request_id"] == r.headers["x-request-id"]
+    assert len(r.headers["x-request-id"]) == 32
+    assert body["detail"] == body["error"]["message"]  # the v1 web UI reads "detail"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    return body["error"]
+
+
+def test_every_response_has_its_own_request_id(client):
+    a, b = client.get("/health"), client.get("/health")
+    assert a.headers["x-request-id"] != b.headers["x-request-id"]
+    spoofed = client.get("/health", headers={"X-Request-ID": "attacker-chosen"})
+    assert spoofed.headers["x-request-id"] != "attacker-chosen"
+
+
+def test_http_errors_use_the_envelope(client):
+    assert _envelope(client.get("/runs/abcd1234"), 404, "not_found")["message"] == "no such run"
+    assert _envelope(client.get("/nowhere"), 404, "not_found")
+    assert _envelope(client.post("/runs/abcd1234/reject"), 409, "conflict")
+    assert _envelope(client.delete("/runs/abcd1234"), 405, "method_not_allowed")
+
+
+def test_validation_errors_name_fields_but_never_echo_values(client):
+    r = client.post("/runs/abcd1234/approve", json={"sha256": "<script>secret-ish</script>"})
+    err = _envelope(r, 422, "invalid_request")
+    assert err["message"] == "invalid request: sha256" and "script" not in r.text
+
+
+def test_host_and_csrf_refusals_use_the_envelope(client):
+    _envelope(client.get("/health", headers={"Host": "attacker.example.com"}), 400, "bad_request")
+    r = client.post("/admin/kill", json={"on": True}, headers={api.CSRF_HEADER: ""})
+    _envelope(r, 403, "forbidden")
+
+
+def test_unexpected_errors_are_generic_and_logged(client, monkeypatch, caplog):
+    from parsemaxxing.ledger import store as db
+
+    def boom(self, limit=100):
+        raise RuntimeError("SELECT secret FROM /srv/internal/path")
+
+    monkeypatch.setattr(db.Store, "jobs", boom)
+    r = client.get("/runs")
+    err = _envelope(r, 500, "internal_error")
+    assert err["message"] == "internal error"
+    assert "SELECT" not in r.text and "/srv" not in r.text and "Traceback" not in r.text
+    assert err["request_id"] in caplog.text and "SELECT secret" in caplog.text
+
+
+def test_body_limit_refusal_uses_the_envelope(client):
+    r = client.post("/uploads", content=b"x", headers={"Content-Length": str(api.MAX_BODY + 1)})
+    _envelope(r, 413, "payload_too_large")
+
+
+def test_validation_logs_never_hold_the_submitted_value(client, caplog):
+    caplog.set_level("INFO", logger="parsemaxxing.api")
+    client.post("/admin/kill", json={"on": "synthetic-secret-in-body-3d9f"})
+    assert "invalid" in caplog.text and "synthetic-secret-in-body-3d9f" not in caplog.text

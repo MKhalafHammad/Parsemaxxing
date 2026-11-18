@@ -162,3 +162,38 @@ test("runs recorded before the event labels still show their agents, phases and 
   await page.goto("/runs/e2e00001?phase=extraction&attempt=1");
   await expect(page.getByRole("main")).toContainText("user=alice action=login"); // the failing example
 });
+
+test("API errors show the envelope's message and request id", async ({ page }) => {
+  await mockRun(page, run("awaiting_approval"), LEDGER);
+  await page.route("**/api/engine/runs/e2e00001/approve", (r) =>
+    r.fulfill({
+      status: 409,
+      headers: { "X-Request-ID": "11111111-2222-4333-8444-555555555555" },
+      json: {
+        error: { code: "conflict", message: "This run is no longer awaiting approval.", request_id: "11111111-2222-4333-8444-555555555555" },
+        detail: "old detail text",
+      },
+    }),
+  );
+  await page.goto("/runs/e2e00001");
+  await page.getByRole("button", { name: "Approve…" }).click();
+  await page.getByRole("button", { name: "Yes, approve" }).click();
+  const alert = page.getByRole("alertdialog").getByRole("alert");
+  await expect(alert).toContainText("This run is no longer awaiting approval.");
+  await expect(alert).toContainText("Request id 11111111-2222-4333-8444-555555555555");
+  await expect(alert).not.toContainText("old detail text");
+
+  // A v1-shaped body: `detail` is the message, the request id comes from the header.
+  await page.route("**/api/engine/tas", (r) =>
+    r.fulfill({ status: 503, headers: { "X-Request-ID": "req-from-header" }, json: { detail: "registry unavailable" } }),
+  );
+  await page.goto("/tas");
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("registry unavailable");
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("Request id req-from-header");
+
+  // Through the real proxy (closed engine): the proxy's own envelope reaches the board.
+  await page.unroute("**/api/engine/tas");
+  await page.goto("/");
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("the engine is not reachable");
+  await expect(page.getByRole("main").getByRole("alert")).toContainText(/Request id [0-9a-f-]{36}/);
+});

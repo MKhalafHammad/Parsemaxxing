@@ -6,6 +6,7 @@ import { useState } from "react";
 import { ActorAvatar } from "@/components/actors/actor";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { ErrorText } from "@/components/ui/error-text";
 import { Meter, ToneIcon } from "@/components/ui/status";
 import { postJson, type Report, type RunDetail, type UpdateReview } from "@/lib/api";
 import { STAGE_LABEL } from "@/lib/events";
@@ -259,7 +260,7 @@ export function ApprovalView({ run, report, phases, fieldOrder, tzNote }: { run:
 /** Sticky decision bar: Approve (with the SHA-256 and a second confirmation), Reject, Download. */
 export function DecisionBar({ run, onDone }: { run: RunDetail; onDone: () => void }) {
   const [confirming, setConfirming] = useState<"approve" | "reject" | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | Error>("");
   const [busy, setBusy] = useState(false);
   const sha = run.record.sha256_test ?? "";
   const update = run.record.report?.update;
@@ -274,7 +275,7 @@ export function DecisionBar({ run, onDone }: { run: RunDetail; onDone: () => voi
       setConfirming(null);
       onDone();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err as Error);
     } finally {
       setBusy(false);
     }
@@ -309,7 +310,7 @@ export function DecisionBar({ run, onDone }: { run: RunDetail; onDone: () => voi
       </div>
       {error && !confirming && (
         <p role="alert" className="mt-2 text-sm text-bad">
-          {error}
+          <ErrorText error={error} />
         </p>
       )}
       <Dialog
@@ -329,7 +330,7 @@ export function DecisionBar({ run, onDone }: { run: RunDetail; onDone: () => voi
         {update && confirming === "approve" && <p className="text-sm">To undo later: <code className="font-mono text-[13px]">{update.rollback}</code></p>}
         {error && (
           <p role="alert" className="text-sm text-bad">
-            {error}
+            <ErrorText error={error} />
           </p>
         )}
         <div className="flex justify-end gap-2">

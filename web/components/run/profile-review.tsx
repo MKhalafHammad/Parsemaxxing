@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { ActorChip } from "@/components/actors/actor";
 import { Button } from "@/components/ui/button";
+import { ErrorText } from "@/components/ui/error-text";
 import { Input, Label } from "@/components/ui/input";
 import { Meter } from "@/components/ui/status";
 import { postJson, type Profile } from "@/lib/api";
@@ -46,7 +47,7 @@ type Form = { vendor: string; product: string; sourcetype: string; tz: string };
 export function ProfileReview({ job, profile, onDone, needsTimezone = false }: { job: string; profile: Profile; onDone: () => void; needsTimezone?: boolean }) {
   const original: Form = { vendor: profile.vendor, product: profile.product, sourcetype: profile.sourcetype, tz: profile.timezone_hint ?? "" };
   const [form, setForm] = useState<Form>(original);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | Error>("");
   const [busy, setBusy] = useState(false);
 
   async function confirm(e: React.FormEvent) {
@@ -61,7 +62,7 @@ export function ProfileReview({ job, profile, onDone, needsTimezone = false }: {
       await postJson(`/runs/${job}/profile`, { ...form, tz: form.tz || null });
       onDone();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err as Error);
     } finally {
       setBusy(false);
     }
@@ -139,7 +140,7 @@ export function ProfileReview({ job, profile, onDone, needsTimezone = false }: {
           </Button>
           {error && (
             <p role="alert" className="mt-2 text-sm text-bad">
-              {error}
+              <ErrorText error={error} />
             </p>
           )}
         </div>

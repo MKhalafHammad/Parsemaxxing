@@ -1,8 +1,9 @@
 // Server-side proxy to the engine. The browser never learns ENGINE_URL, and only these paths
 // and methods pass. State changes must come from this app's own pages: a same-origin Origin
 // and the custom header are both required, and the engine checks its header again.
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 
+import { errorResponse } from "@/lib/error-envelope";
 import { allowedHost, allowedOrigin } from "@/lib/hosts";
 
 const ENGINE_URL = process.env.ENGINE_URL ?? "http://127.0.0.1:8080";
@@ -25,20 +26,20 @@ async function forward(req: NextRequest, path: string[]): Promise<Response> {
     /\/\/|%2f|%5c/i.test(raw) ||
     path.some((seg) => /[/\\]/.test(seg) || seg === "." || seg === ".." || seg === "")
   ) {
-    return NextResponse.json({ detail: "not found" }, { status: 404 });
+    return errorResponse(404, "not_found", "not found");
   }
   const target = path.join("/");
   if (!ROUTES.some((r) => r.method === req.method && r.pattern.test(target))) {
-    return NextResponse.json({ detail: "not found" }, { status: 404 });
+    return errorResponse(404, "not_found", "not found");
   }
   // Defence in depth with proxy.ts: a known Host on every request, and for state changes the
   // custom header plus an Origin from the fixed list (never one derived from Host).
   if (!allowedHost(req.headers.get("host"))) {
-    return NextResponse.json({ detail: "unknown host" }, { status: 421 });
+    return errorResponse(421, "misdirected_request", "unknown host");
   }
   if (req.method !== "GET") {
     if (req.headers.get("x-parsemaxxing") !== "1" || !allowedOrigin(req.headers.get("origin"))) {
-      return NextResponse.json({ detail: "cross-site request refused" }, { status: 403 });
+      return errorResponse(403, "forbidden", "cross-site request refused");
     }
   }
   const headers: Record<string, string> = { "X-Parsemaxxing": "1" };
@@ -60,10 +61,10 @@ async function forward(req: NextRequest, path: string[]): Promise<Response> {
       signal: req.signal,
     });
   } catch {
-    return NextResponse.json({ detail: "the engine is not reachable" }, { status: 502 });
+    return errorResponse(502, "bad_gateway", "the engine is not reachable");
   }
   const out = new Headers();
-  for (const h of ["content-type", "content-disposition", "cache-control"]) {
+  for (const h of ["content-type", "content-disposition", "cache-control", "x-request-id"]) {
     const v = upstream.headers.get(h);
     if (v) out.set(h, v);
   }
