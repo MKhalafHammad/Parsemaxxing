@@ -1,0 +1,4 @@
+# Only LICENSE and NOTICE are read from the repo root (the "repo" build context).
+*
+!LICENSE
+!NOTICE

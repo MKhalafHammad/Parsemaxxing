@@ -4,7 +4,9 @@ server mapping for heavy forwarders.
 Subcommands (writes need --lab-write; only probe apps named `...__test_probe`):
   shc-calls   read-only: find the REST calls a CLI `splunk apply shcluster-bundle` made, from
               the deployer's splunkd_access log (run the CLI push once first, by hand)
-  shc-push    POST apps/deploy on the deployer with a token, targeting one member
+  shc-push    POST apps/deploy on the deployer with a token. It pushes the deployer's whole
+              staged bundle to the cluster, so it also needs --deployer-guid matching this
+              deployer's server/info GUID (a lab deployer holding only probe apps)
   ds-map      on a DS for HFs: create a probe server class for one named client, map an app
               already staged in deployment-apps, reload; refuses a client that looks like a UF
   ds-unmap    remove the probe server class again
@@ -12,6 +14,7 @@ Run: PMX_LAB_DEPLOY_TOKEN=... python -m parsemaxxing.tools.probes.probe_delivery
        --host <deployer or DS> --lab-write <subcommand> ...
 """
 
+import re
 import sys
 
 from splunklib.binding import HTTPError
@@ -19,6 +22,7 @@ from splunklib.binding import HTTPError
 from parsemaxxing.tools.probes import lab
 
 SERVERCLASS = "pmx_probe_hf__test_probe"
+MEMBER_URI = re.compile(r"https://[A-Za-z0-9.-]{1,253}:[0-9]{1,5}")
 
 
 def looks_universal(content: dict) -> bool | None:
@@ -43,7 +47,16 @@ def shc_calls(service) -> None:
         print(f"  {r.get('method')} {r.get('uri_path')} -> {r.get('status')} x{r.get('count')}")
 
 
-def shc_push(service, member: str, action: str) -> None:
+def require_push_target(member: str, deployer_guid: str, actual_guid: str) -> None:
+    """apps/deploy pushes the whole bundle, so the operator must name this exact deployer."""
+    if not MEMBER_URI.fullmatch(member):
+        raise SystemExit("refusing: --member must be https://<host>:<port>")
+    if not actual_guid or deployer_guid != actual_guid:
+        raise SystemExit("refusing: --deployer-guid does not match this deployer's server/info")
+
+
+def shc_push(service, member: str, action: str, deployer_guid: str) -> None:
+    require_push_target(member, deployer_guid, str(service.info.get("guid", "")))
     try:
         service.post("apps/deploy", target=member, action=action, advertising="true")
         print(f"apps/deploy action={action}: ok")
@@ -97,6 +110,7 @@ def main() -> int:
     push = sub.add_parser("shc-push")
     push.add_argument("--member", required=True, help="https://<member>:8089")
     push.add_argument("--action", default="all", choices=["all", "lookups"])
+    push.add_argument("--deployer-guid", required=True, help="server/info guid of the lab deployer")
     m = sub.add_parser("ds-map")
     m.add_argument("--client", required=True, help="deployment client name of one lab HF")
     m.add_argument("--app", required=True)
@@ -114,7 +128,7 @@ def main() -> int:
     if args.cmd == "shc-calls":
         shc_calls(service)
     elif args.cmd == "shc-push":
-        shc_push(service, args.member, args.action)
+        shc_push(service, args.member, args.action, args.deployer_guid)
     elif args.cmd == "ds-map":
         return ds_map(service, args.client, args.app)
     else:

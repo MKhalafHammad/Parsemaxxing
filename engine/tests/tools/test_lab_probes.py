@@ -8,7 +8,7 @@ import pytest
 
 from parsemaxxing.tools.probes import lab
 from parsemaxxing.tools.probes.probe_cim import summarize_model, summary_hash
-from parsemaxxing.tools.probes.probe_delivery import looks_universal
+from parsemaxxing.tools.probes.probe_delivery import looks_universal, require_push_target
 from parsemaxxing.tools.probes.probe_read_role import checks
 from parsemaxxing.tools.probes.probe_retention import retention_verdict
 
@@ -220,3 +220,21 @@ def test_read_role_checks_reject_injected_names(bad):
         checks(bad, "other", "st")
     with pytest.raises(ValueError):
         checks("idx", "other", bad)
+
+
+@pytest.mark.parametrize(
+    ("member", "given", "actual"),
+    [
+        ("https://shc1.example.com:8089", "guid-a", "guid-b"),  # another deployer
+        ("https://shc1.example.com:8089", "", ""),  # unknown GUID
+        ("https://shc1.example.com:8089/x?y", "guid-a", "guid-a"),  # extra path
+        ("http://shc1.example.com:8089", "guid-a", "guid-a"),  # no TLS
+    ],
+)
+def test_shc_push_refuses_unnamed_deployer_or_odd_member(member, given, actual):
+    with pytest.raises(SystemExit):
+        require_push_target(member, given, actual)
+
+
+def test_shc_push_accepts_named_deployer():
+    require_push_target("https://shc1.example.com:8089", "guid-a", "guid-a")
