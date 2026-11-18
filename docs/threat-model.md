@@ -1,85 +1,119 @@
 # Parsemaxxing threat model
 
-> Written in Phase 1 and kept current. Source of the controls: [design.md](design.md), "Guardrails and security". The Phase column says which build phase delivered each control ([build-plan.md](build-plan.md)); controls that are not built say so. Last updated Nov 3, 2026.
+> Version 2, written in Phase 11. Version 1 (Phases 1 to 10) covered one operator and one standalone Splunk; version 2 adds users and roles, LDAP, the settings store and secrets vault, production Splunk environments, MSP tenants, the knowledge base, discovery and the SSH relay. Source of the controls: [design.md](design.md) and the v2 plan in [build-plan.md](build-plan.md). The control-by-standard view is [security-baseline.md](security-baseline.md). The Phase column says which build phase delivers each control. Threats T1 to T10 are built unless a row says otherwise; every T11 to T18 control is **planned** until its phase lands. Last updated Nov 18, 2026.
 
 ## Scope and assumptions
 
-**In scope:** the hackathon deployment.
-- One standalone Splunk Enterprise instance, either the lab VM or the `splunk` service in `docker-compose.yml`.
-- The Parsemaxxing engine (FastAPI, orchestrator, workers) and PostgreSQL.
-- The Next.js UI.
-- The hosted Meta Model API, or a self-hosted Muse Spark Open.
+**In scope (v2 target):**
+- The Parsemaxxing engine (FastAPI, orchestrator, workers), PostgreSQL and the Next.js UI, on one host or a small server, optionally behind an HTTPS reverse proxy.
+- One or more **sandbox** Splunk Enterprise instances (standalone, test only).
+- Any number of **production** Splunk environments (standalone or distributed: search heads, search head cluster with deployer, heavy forwarders, deployment servers; indexers and cluster managers read-only), dedicated to one customer or shared by several MSP customers.
+- The SSH relay (`relay/pmx-relay`) on a deployer or a deployment server that serves heavy forwarders.
+- A directory server (LDAP) for logins.
+- LLM providers, hosted or on-prem.
 - The public GitHub repository and its CI.
 
-**Assumptions:**
-- A1: the stack runs on one host or a lab network that the operator controls. Published ports bind to `127.0.0.1` only: Splunk Web 8000, UI 3000, and since Phase 5 the engine API 8080 (for the CLI and the UI during development) and PostgreSQL 55432 (for the CLI on the host; the engine itself uses the limited `parsemaxxing_app` role). Splunk REST (8089) is not published by docker-compose.
-- A2: the operator is trusted. Multi-team use (approver ≠ submitter, per-resource authorization) is deferred, per design.md "Deferred".
-- A3: the sample logs are **untrusted**. Anyone who can make a device write a log line can put text into them, so we must assume an attacker controls log content.
-- A4: model output is **untrusted**. A model can be manipulated by its input or simply be wrong.
-- A5: during the hackathon only synthetic logs are used. Real logs are possible later, so the controls must hold for them.
-- A6: lab TLS uses self-signed certificates, and verification is deferred (design.md "Deferred").
+**What the code does today (v1 state, until Phases 12 to 14 land):** one operator, one standalone Splunk, no login. The threats T1 to T10 describe that build. Phases 12 to 14 must land before the platform is exposed beyond localhost.
 
-**Out of scope:** Splunk Cloud, clusters, forwarders, compromise of the Splunk or Meta platforms themselves, and physical access to the host.
+**Assumptions:**
+- A1: **today**, published ports bind to `127.0.0.1` only: Splunk Web 8000, UI 3000, engine API 8080 and PostgreSQL 55432 (the engine itself uses the limited `parsemaxxing_app` role). Splunk REST (8089) is not published by docker-compose. **v2:** the platform may run on a shared server; only the reverse proxy (or the web port) is exposed, and every engine route needs a role (T11).
+- A2: **today** the single operator is trusted. **v2:** two roles (`viewer`, `admin`, D6). Admins are trusted to operate the platform and may approve their own deployments (owner decision); a per-environment four-eyes setting exists and is off by default (R14).
+- A3: sample logs are **untrusted**. Anyone who can make a device write a log line controls its content. This includes events pulled from production by discovery and drift.
+- A4: model output is **untrusted**. A model can be manipulated by its input or simply be wrong. The same holds for every provider.
+- A5: real logs are expected in v2. They stay at most 30 days after their job ends (7.19) and reach a hosted model only masked, unless the customer's data policy allows raw samples to that provider.
+- A6: TLS verification is **off today** for the self-signed lab Splunk (R2). **v2:** on by default for Splunk, LDAP, LLM providers and imported URLs; turning it off is per node, admin-only, audited and shown as a warning.
+- A7: retrieved knowledge (imported documents, reference add-ons, fix memory) is **untrusted data**, never instruction, and never decides pass or fail.
+- A8: in an MSP shared environment, Splunk itself does not separate customers on the shared search heads; only Parsemaxxing's code-owned base searches and per-customer heavy forwarders do (T16).
+
+**Out of scope:** Splunk Cloud, universal forwarders as a target, compromise of the Splunk platform or an LLM provider itself, a malicious admin (admins are trusted, A2), and physical access to the host.
 
 ## Assets
 
 | ID | Asset | Why it matters |
 | --- | --- | --- |
-| AS1 | Production data in Splunk (non-`pmx_` indexes, live sourcetypes) | Index-time mistakes corrupt it permanently; rerouting or dropping events loses it |
-| AS2 | The Splunk instance's integrity (apps, `[default]` settings, transforms, other teams' TAs) | A malicious or broad config changes parsing for everything |
-| AS3 | Splunk service tokens (`parsemaxxing_search`, `_deploy`, `_drift`) and the admin password | Each grants REST access at its role's level |
-| AS4 | `LLM_API_KEY` and the $150 credit balance | Theft or runaway use costs money and quota |
-| AS5 | PostgreSQL contents: jobs, append-only ledger, uploaded samples | The audit trail and the approval record |
-| AS6 | Approved TA packages (`.tgz`) and their SHA-256 binding | Promotion must deploy exactly what a human approved |
-| AS7 | Sample logs (synthetic now, possibly real later) | Real logs can contain secrets, personal data and internal names |
+| AS1 | Production data in Splunk (non-`pmx_` indexes, live sourcetypes), in every environment | Index-time mistakes corrupt it permanently; rerouting or dropping events loses it |
+| AS2 | Splunk integrity (apps, `[default]` settings, transforms, other teams' add-ons) on sandboxes and production nodes | A malicious or broad config changes parsing for everything |
+| AS3 | Sandbox service tokens (`parsemaxxing_search`, `parsemaxxing_deploy`, `_drift`) and the sandbox admin password | Each grants REST access at its role's level; the deploy token is near-admin (R8) |
+| AS4 | LLM provider API keys and the token and cost budget | Theft or runaway use costs money and quota |
+| AS5 | PostgreSQL contents: jobs, append-only ledger, registry, users, settings, environments, deployments | The audit trail, the approval record and the platform's configuration |
+| AS6 | Approved add-on packages (`.tgz`), their SHA-256 and the approvals bound to them | Every install must be exactly what a human approved |
+| AS7 | Sample logs and masking maps (synthetic in the repo; real ones in v2) | Real logs can hold secrets, personal data and internal names; masking maps link fake values back to real ones |
 | AS8 | The public repository and CI | Leaked secrets or real data are permanent; CI is a supply-chain entry point |
-| AS9 | The Validator, `cim_spec/` and truth manifests | If an agent can change the judge, every result is meaningless |
+| AS9 | The Validator, `cim_spec/`, truth manifests and the gate's key tables | If an agent or a document can change the judge, every result is meaningless |
+| AS10 | User accounts: password hashes, TOTP secrets, recovery codes, sessions, API tokens | Each one is a login to the platform |
+| AS11 | The secrets vault (`secrets` table) and the key-encryption key file `secrets/pmx_kek` | The KEK unwraps every stored secret; losing it loses them all |
+| AS12 | Production credentials per environment: `parsemaxxing_read` and `parsemaxxing_deploy` tokens, relay SSH private keys, the relay's Splunk login, node CA bundles, drift webhook tokens | Write access to production Splunk hosts, and read access to customer data |
+| AS13 | The LDAP bind password and the group-to-role mapping | A wrong mapping grants admin |
+| AS14 | Settings store and settings history, customer data policies, tenant index allowlists | They decide where data may go and which indexes a customer's searches may read |
+| AS15 | The knowledge base: sources, chunks, per-version key tables, fix memory, signing keys for offline packs | Poisoned knowledge steers proposals; a wrong key table changes what the gate allows |
+| AS16 | The add-on package store (`ta-store/`) and each version's masked regression set | The only copy of every released version; must never be lost or changed |
+| AS17 | Audit records: `auth_events`, `deployment_events`, the ledger hash chain, the relay's local log | Accountability for every login, approval and production change |
+| AS18 | Encrypted backups (`pg_dump` piped to `age`, plus the package store) | Leave the host; hold everything above except the KEK |
 
 ## Actors
 
 | ID | Actor | Trust | Reaches |
 | --- | --- | --- | --- |
-| AC1 | Operator / approver (the owner) | Trusted | UI, CLI, `.env`, Splunk Web |
-| AC2 | Log author: any device, user or attacker that can get text into a sample | **Untrusted** | Sample content only |
-| AC3 | Muse Spark agents | **Untrusted output** | Their prompt only: agents make no tool calls (code runs `test_regex` in the gate; `run_search` is built but not given to agents) |
-| AC4 | A local network or browser attacker | Untrusted | Ports bound on the host; the operator's browser via XSS/CSRF |
-| AC5 | Public-repo visitors and contributors | Untrusted | The repository, issues and PRs (CI runs on PRs) |
-| AC6 | Third-party dependencies and actions (PyPI, npm, Docker images, GitHub Actions) | Partially trusted | Code execution in builds, CI and containers |
+| AC1 | `admin` (today: the single operator) | Trusted to operate | UI, CLI with an API token, settings, environments, approvals and deployments; host access to `.env` and the KEK only for the platform owner |
+| AC7 | `viewer` | Authenticated, read-only | Everything except secret values, including raw samples by default (owner decision, views audited); changes nothing |
+| AC2 | Log author: any device, user or attacker that can get text into a sample or a production event | **Untrusted** | Sample and event content only |
+| AC3 | Agents (Profiler, Index-time, Extraction, CIM mapper, Router, Drift Analyst), on any configured provider | **Untrusted output** | Their prompt only: agents make no tool calls, except the Drift Analyst's one masked `fetch_more_samples` (planned) |
+| AC8 | Directory server (LDAP) | Trusted for identity and group membership, over LDAPS only | Answers the engine's binds and searches; a compromised or misconfigured directory can grant roles |
+| AC9 | Remote Splunk nodes (production search heads, deployers, heavy forwarders, deployment servers, indexers read-only) | Partially trusted: their responses are data | REST answers, search results, installed add-on configs, drift webhooks to the engine |
+| AC10 | The SSH relay on a Splunk host | Trusted to run only its fixed verbs; its output is data | Splunk apps directories and CLI on its host, as the `splunk` user |
+| AC11 | MSP customers (tenants) of a shared environment | Untrusted toward each other | Their own indexes and heavy forwarders; their logs reach Parsemaxxing through discovery, drift and uploads |
+| AC12 | LLM providers | Trusted with the data their customer policy allows; hosted ones see masked data | Prompts and samples sent to them |
+| AC13 | Authors of imported knowledge (PDFs, offline packs, reference add-ons, URL imports) | **Untrusted content** even when an admin imports it | Text that may be retrieved into prompts |
+| AC4 | A network or browser attacker | Untrusted | Exposed ports; a user's browser via XSS, CSRF or DNS rebinding; the network between the engine and Splunk, LDAP or providers |
+| AC5 | Public-repo visitors and contributors | Untrusted | The repository, issues and PRs (CI runs on PRs; outside PRs are not merged until contributor terms exist) |
+| AC6 | Third-party dependencies, images, models and actions (PyPI, npm, Docker images, GitHub Actions, the embedding model, `splunk-agent-skills`) | Partially trusted | Code execution in builds, CI and containers; content in the knowledge base |
 
 ## Trust boundaries
 
 | ID | Boundary | Crossing |
 | --- | --- | --- |
-| TB1 | Upload → engine (a drop folder is planned) | Files and form fields from AC1, carrying AC2's content |
-| TB2 | Engine → model API | Prompts built from samples; responses come back as proposals |
+| TB1 | Upload → engine (a drop folder is planned) | Files and form fields from a user, carrying AC2's content |
+| TB2 | Engine → LLM providers | Prompts built from samples (masked for hosted providers, through the one LLM client); responses come back as proposals |
 | TB3 | Model output → orchestrator | Proposed config as a schema-validated object |
-| TB4 | Orchestrator → Splunk REST | Deploy, reload and ingest (deploy token); searches (search token) |
-| TB5 | Splunk → engine | Search results (contain log text); the drift webhook is planned |
+| TB4 | Orchestrator → sandbox Splunk REST | Deploy, reload and ingest (deploy token); searches (search token) |
+| TB5 | Splunk → engine | Search results (contain log text); the drift webhook (planned) |
 | TB6 | Browser ↔ FastAPI | UI actions, SSE stream rendering log text |
 | TB7 | Developer machine / CI ↔ public GitHub | Commits, PRs, CI runs, pulled dependencies |
+| TB8 | Anonymous → authenticated | Login (local or LDAP), MFA, session cookie, API token; then the route policy decides viewer or admin |
+| TB9 | Engine ↔ directory | LDAPS or StartTLS bind and search with the service account, then a user bind |
+| TB10 | Engine ↔ vault and KEK | The KEK file mounted as a Docker secret into the engine only; secrets decrypted only at the moment of use |
+| TB11 | Sandbox ↔ production | Tests run only on sandboxes; production is written only by `engine/parsemaxxing/deploy/` with a hash-bound approval |
+| TB12 | Engine → production Splunk REST | Read token for discovery, drift, impact analysis, preview and verification; deploy token only in managed mode |
+| TB13 | Engine → SSH relay → Splunk host | Pinned host key, a dedicated key with a forced command and fixed verbs; the relay's Splunk login sent on stdin for one call |
+| TB14 | Customer ↔ customer inside a shared MSP environment | Index allowlists, per-customer heavy forwarders, the code-owned tenant base search |
+| TB15 | Imported knowledge → knowledge base → prompts | Signature and hash checks, quarantine until an admin approves, `<reference>` data blocks |
+| TB16 | Engine → outbound URLs a user can influence | The SSRF-safe fetch helper (URL import, outbound webhooks) |
+| TB17 | Host → backups | Encrypted dumps leave the host; the KEK is backed up separately |
 
 ## Data flows
 
 ```
-AC1 ──upload──► [TB1] API ──► PostgreSQL (job, samples, ledger)
-                              │
-              orchestrator ◄──┘
-                 │  curated context (samples as data)
-                 ├──[TB2]──► Meta Model API / Muse Spark Open
-                 │◄─[TB3]─── proposal (schema-validated)
-                 │
-                 ├── guardrail gate ──► TA builder (escaping writer) ──► .tgz + SHA-256
-                 │
-                 ├──[TB4 deploy token]──► Splunk: install TA__test_<job>, ingest pmx_test as <st>__test_<job>_a<n>
-                 ├──[TB4 search token]──► Splunk: Validator fixed SPL
-                 │◄─[TB5]─── results (log text = data)
-                 │
-                 └──► ledger ──SSE──[TB6]──► UI (escaped text) ──approve(hash)──► promote
+user ──login──[TB8]──► API ──route policy──► handlers
+  │                                            │
+  └─upload─[TB1]─► samples (encrypted, 30-day purge) ──► orchestrator
+                                                          │ knowledge retrieved by code [TB15]
+                                                          │ masked samples, data blocks
+                                                          ├──[TB2]──► LLM provider(s)
+                                                          │◄─[TB3]─── proposal (schema-validated)
+                                                          ├── guardrail gate ──► TA builder ──► .tgz + SHA-256
+                                                          ├──[TB4]──► sandbox: install TA__test_<job>, ingest pmx_test
+                                                          │◄─[TB5]─── Validator fixed SPL results (data)
+                                                          └──► approval (hash) ──► package store (write-once)
+admin ──approve deployment (hash, environment, tiers)──► deploy/ ──[TB11]
+                                                          ├──[TB12 REST]──► standalone, SH, HF
+                                                          └──[TB13 SSH]──► relay ──► SHC deployer, DS for HFs
+production SH ──[TB12 read token, TB14 tenant base search]──► discovery, drift, preview, verify
+engine ──[TB9]──► directory      engine ──[TB10]──► vault      engine ──[TB16]──► fetch helper
 ```
 
 ## Threats
 
-Each threat lists the controls from design.md that stop it, their priority (Must/Should) and the build phase that delivers them.
+Each threat lists the controls that stop it, their priority (Must/Should) and the build phase that delivers them. T1 to T10 come from v1 and still apply; their phases are v1 phases (0 to 10) unless a row names a v2 phase. Old Phases 8 and 9 (drift, routing) are superseded by Phases 22 and 23. T11 to T18 are new in v2 and all planned.
 
 ### T1. Malicious or crafted log content (prompt injection)
 
@@ -109,7 +143,7 @@ Each threat lists the controls from design.md that stop it, their priority (Must
 | T2.12 | Bypass by normalization tricks: key case (`sedcmd-`), whitespace, unicode look-alikes, `TRANSFORMS-`/`REPORT-` chaining into a transform with a forbidden `DEST_KEY` | Gate normalizes keys before checking and inspects every referenced transform | Must | 4 |
 | T2.14 | Agent-proposed field names or aliases are interpolated into the Validator's SPL and inject commands | Identifiers in Validator SPL must match an allowlist regex before use; never interpolate free text | Must | 3 |
 | T2.15 | SQL or OS command injection from job data | Parameterized SQL only; subprocess with argument lists, never `shell=True` | Must | 2, 5 |
-| T2.13 | Routing rule on a shared stanza (`[syslog]`) steals other vendors' events | Narrow exception (`TRANSFORMS-` only with `DEST_KEY = MetaData:Sourcetype`), negative routing test = 0 misrouted | Must | 9 (future enhancement) |
+| T2.13 | Routing rule on a shared stanza (`[syslog]`) steals other vendors' events | Narrow exception (`TRANSFORMS-` only with `DEST_KEY = MetaData:Sourcetype`), negative routing test = 0 misrouted | Must | 23 (mixed-feed routing; old Phase 9) |
 
 ### T3. Path traversal and package tampering
 
@@ -144,10 +178,10 @@ Each threat lists the controls from design.md that stop it, their priority (Must
 | T5.2 | Test ingestion consumes the license | Per-job and daily byte caps | Must | 4 |
 | T5.3 | Test data fills the disk; cleanup deletes resources that existed before | One shared test index, created by an admin with a size cap (`maxTotalDataSizeMB`, not age-based retention: samples carry historical timestamps). The engine creates and deletes no indexes or data; test events roll out by size. License use is covered by T5.2 | Must | 1 (decision), 10 (bootstrap) |
 | T5.4 | Untested config parses production data during testing | Test identity: `__test_<job>` app and `__test_<job>_a<attempt>` sourcetype; real names restored by code at promotion; both hashes linked; smoke test | Must | 2 (naming), 4 (rename + smoke) |
-| T5.5 | A leftover routing transform keeps affecting production after reject | Rollback removes every TA file and re-runs the negative routing test | Must | 4, 9 |
+| T5.5 | A leftover routing transform keeps affecting production after reject | Rollback removes every TA file and re-runs the negative routing test | Must | 4, 23 |
 | T5.6 | Hung workers or runs that never end | Timeouts on every Splunk and model call; per-run wall clock (15 min) and token ceiling | Must | 2, 4 |
 | T5.7 | Splunk writes from parallel jobs interfere | One global lock for app install and reload | Must | 5 |
-| T5.8 | One job's config reaches another job's events in the shared test index: an eventtype or tag exported system-wide matches `index=pmx_test`, or a routing transform relabels events into another job's sourcetype | Code, not the agent, writes every props stanza name (the job's own test sourcetype), every transform and eventtype name (`parsemaxxing_<job>_` prefix) and every tag (from `cim_spec`). Each eventtype search is `sourcetype=<own attempt sourcetype> (<filter>)`; the filter must have balanced parentheses and no pipe, subsearch, macro, backslash (an escaped quote would desync quote tracking, appsec H1), or `index`/`sourcetype`/`source`/`host`/`eventtype`/`tag` term, so an `OR` inside it cannot escape the anchor (2026-10-28, Phase 3). A routing `FORMAT` must be `sourcetype::<own attempt sourcetype>`. Adversarial test per rule | Must | 3 (eventtypes, built), 9 (routing) |
+| T5.8 | One job's config reaches another job's events in the shared test index: an eventtype or tag exported system-wide matches `index=pmx_test`, or a routing transform relabels events into another job's sourcetype | Code, not the agent, writes every props stanza name (the job's own test sourcetype), every transform and eventtype name (`parsemaxxing_<job>_` prefix) and every tag (from `cim_spec`). Each eventtype search is `sourcetype=<own attempt sourcetype> (<filter>)`; the filter must have balanced parentheses and no pipe, subsearch, macro, backslash (an escaped quote would desync quote tracking, appsec H1), or `index`/`sourcetype`/`source`/`host`/`eventtype`/`tag` term, so an `OR` inside it cannot escape the anchor (2026-10-28, Phase 3). A routing `FORMAT` must be `sourcetype::<own attempt sourcetype>`. Adversarial test per rule | Must | 3 (eventtypes, built), 23 (routing) |
 | T5.9 | Someone with write access to the packages folder swaps the `.tgz` between build and install, and the near-admin deploy token installs their app | The packages folder must not be a symlink, must be owned by the engine user and not group/world-writable (checked in code); packages are created with `O_EXCL|O_NOFOLLOW` under a unique per-job/attempt name; the SHA-256 is re-checked just before install (T3.5). In Docker the volume is read-only in `splunk`; the VM copy step re-checks the hash | Must | 2 |
 | T5.10 | A parser update replaces a TA Parsemaxxing did not build, or a different version than the one reviewed | Updates only for TAs in the registry (written only at Parsemaxxing promotion); upload and CLI refuse anything else. In-place install only through `update_app`: a real `TA-parsemaxxing-…` name, the installed version must equal the registry's `version_from` and its `app.conf` must carry the Parsemaxxing marker; the registry row must still be at that version (checked again when the version is added) | Must | 7 |
 | T5.11 | An update or rollback writes or deletes `local/` (admin overrides) | Packages hold only `default/`, `metadata/`, `lookups/` (allowlist); `update=true` keeps `local/` (lab Q11); the engine posts only to `apps/local` and `receivers/simple`, never to `configs/conf-*` (test). The review flags overrides that would hide the fix | Must | 7 |
@@ -162,8 +196,8 @@ Each threat lists the controls from design.md that stop it, their priority (Must
 | T6.2 | Acting on an ambiguous deploy after a crash | On resume, the job's own test app is uninstalled and redeployed under a new attempt sourcetype; the lease fences off the crashed worker | Must | 4, 5 |
 | T6.3 | Two workers processing the same job | `FOR UPDATE SKIP LOCKED` claim, lease and heartbeat; unique source key and content hash | Must | 5 |
 | T6.4 | Audit history edited after the fact | Append-only ledger | Should | 5 |
-| T6.5 | Results that cannot be reproduced | Ledger records model version, Validator version, CIM spec hash and artifact hash. **Not built**: package hashes are recorded, the rest is planned | Should | — |
-| T6.6 | Runaway credit spend | Per-run token ceiling, LLM concurrency cap, global daily budget and kill switch, Meta billing spend limit | Must | 2, 5 |
+| T6.5 | Results that cannot be reproduced | Ledger records model version, Validator version, CIM spec hash and artifact hash. **Partly built**: package hashes are recorded; provider and model per call (Phase 16) and the settings snapshot hash (Phase 12) are planned | Should | 16, 12 |
+| T6.6 | Runaway credit spend | Per-run token ceiling, LLM concurrency cap, global daily budget and kill switch, provider billing spend limit | Must | 2, 5 |
 
 ### T7. Secrets and sensitive data exposure
 
@@ -171,7 +205,7 @@ Each threat lists the controls from design.md that stop it, their priority (Must
 | --- | --- | --- | --- | --- |
 | T7.1 | Tokens or the API key committed to the public repo | `.env` git-ignored, `.env.example` placeholders, gitleaks in pre-commit and over full history in CI | Must | 0 (done) |
 | T7.2 | Credentials in prompts, logs or the ledger | No credentials in prompts; redaction in logs and ledger; probes and CLI never print tokens | Must | 1 (probes), 2 |
-| T7.3 | Secrets inside sample logs reach a hosted model | Secret scan of samples; warning banner and masking option; on-prem mode. **Not built** except on-prem mode and the README warning (R7) | Should | — |
+| T7.3 | Secrets inside sample logs reach a hosted model | Secret scan of samples; masking at the LLM client; egress policy per customer; on-prem mode. **Built:** on-prem mode and the README warning only (R7) | Must | 16 (egress), 21 (masking, secret scan) |
 | T7.4 | A token with more power than needed is stolen | Three scoped accounts: search (only `pmx_*`, `_internal`; it also holds `list_all_objects` so code can read Splunk config, which means a stolen search token can read that config, while agents cannot because the search guard refuses `| rest`), deploy (orchestrator only), drift (read-only, registered sourcetypes). The deploy token is near-admin (`admin_all_objects` + `install_apps`, Q9): stolen, it can install any app from any path splunkd can read or write a scripted input, which is **code execution as the splunk user on the Splunk host**; it can also write to any index and delete any app. So it lives only in the orchestrator process and never reaches agents, prompts, the web process or the ledger; it is created with a short expiry; the install and delete helpers assert the app name matches `^TA-parsemaxxing-[a-z0-9_:-]+__test_[a-z0-9_]+$` and the package path resolves inside `PARSEMAXXING_PACKAGES_DIR` before every call | Must | 1 (create), 2 |
 | T7.5 | The engine gets the Docker socket to run `btool` and becomes a host-root path | Never mount the Docker socket into engine or web; see Q7 | Must | 1 (decision) |
 | T7.6 | Real logs or internal names committed to the repo | Only synthetic fixtures; documentation IP ranges and `example.com`; appsec review of every PR | Must | All |
@@ -181,11 +215,11 @@ Each threat lists the controls from design.md that stop it, their priority (Must
 | ID | Threat | Controls | Priority | Phase |
 | --- | --- | --- | --- | --- |
 | T8.1 | `<script>` in a log line runs in the approver's browser (raw vs parsed view) | Log text only ever React text nodes; highlights built as React elements from engine-computed UTF-16 offsets; lint fails on `dangerouslySetInnerHTML`, `innerHTML`, `insertAdjacentHTML`, `document.write`, `srcDoc`, `eval`, `new Function`; per-request CSP nonce, no `'unsafe-inline'` scripts (`web/e2e/xss.spec.ts`) | Must | 6 (built) |
-| T8.2 | Anyone reaching the API approves or promotes | Bind to `127.0.0.1` (A1, built); login and approver role **not built** (R1) | Should | 5 (binding) |
+| T8.2 | Anyone reaching the API approves or promotes | Bind to `127.0.0.1` (A1, built); login and roles **planned** (R1, T11) | Must | 5 (binding), 13 (login) |
 | T8.3 | A malicious page makes the operator's browser call approve (CSRF) | CORS restricted to the UI origin; every non-GET request needs the `X-Parsemaxxing: 1` header (only sendable cross-site after a preflight CORS refuses) and is refused with a foreign `Origin`; a cross-site multipart upload is refused (`api/test_api.py::test_cross_site_requests_are_refused`) | Must | 5 (built), 6 |
 | T8.5 | DNS rebinding: a malicious page rebinds its domain to `127.0.0.1`; the browser then treats it as same-origin, so CORS and custom headers do not stop it | Host allowlist in `web/proxy.ts` for every page and API request (421 otherwise) and again in the `/api/engine` route; Origin checked against a fixed list, never derived from Host; TrustedHost on the engine (`web/e2e/proxy.spec.ts`) | Must | 5 (engine), 6 (UI, built) |
 | T8.6 | Clickjacking the approve button; exfiltration via images if agent text is ever rendered as markdown | CSP with `frame-ancestors 'none'` and `img-src 'self'` | Must | 6 |
-| T8.4 | A risky approval looks routine | Approve and reject always need a second confirmation that names the package hash; routing (the only high-risk change) is not built | Should | 6 (built), 9 |
+| T8.4 | A risky approval looks routine | Approve and reject always need a second confirmation that names the package hash; routing (the only high-risk change) is not built | Should | 6 (built), 23 |
 
 ### T9. Supply chain
 
@@ -193,10 +227,10 @@ Each threat lists the controls from design.md that stop it, their priority (Must
 | --- | --- | --- | --- | --- |
 | T9.1 | A GitHub Action tag is repointed to malicious code | Actions pinned to commit SHAs; semgrep blocks mutable tags | Must | 0 (done) |
 | T9.2 | A vulnerable or hijacked Python/npm dependency | pip-audit and npm audit in CI; lockfile committed for web | Must | 0, 6 |
-| T9.3 | Dependency drift between installs | Pinned dependencies with hashes | Should | 10 |
+| T9.3 | Dependency drift between installs | Pinned dependencies with hashes | Should | 12 (R12) |
 | T9.4 | A container runs as root or with extra privileges | Non-root images; `no-new-privileges`; `cap_drop: ALL` and a read-only root filesystem for the engine; no Docker socket; only localhost-bound ports (A1); database owner credentials only in the one-shot `migrate` service | Must | 5 (engine), 6 (web) |
-| T9.6 | A base image tag is repointed (`splunk/splunk`, `postgres`, `python`) | Pin images by digest | Should | 10 |
-| T9.7 | A tampered CIM add-on download, or tampered Muse Spark Open weights in on-prem mode | Download only from Splunkbase / the official source and verify published checksums; record the version in the ledger | Should | 1 (lab), 10 |
+| T9.6 | A base image tag is repointed (`splunk/splunk`, `postgres`, `python`) | Pin images by digest | Should | 12 (R12) |
+| T9.7 | A tampered CIM add-on download, or tampered on-prem model weights | Download only from Splunkbase / the official source and verify published checksums; record the version in the ledger | Should | 1 (lab), 12, 17c (CIM library) |
 | T9.5 | A PR from a fork exfiltrates secrets through CI | CI uses `pull_request` (not `pull_request_target`), `permissions: contents: read`, no secrets in CI | Must | 0 (done) |
 
 ### T10. Public repository exposure
@@ -206,26 +240,148 @@ Each threat lists the controls from design.md that stop it, their priority (Must
 | T10.1 | A secret, real log, internal hostname or IP is pushed | gitleaks (pre-commit and CI full history); appsec review before merge; synthetic data only | Must | All |
 | T10.3 | Security reports filed publicly with secrets | SECURITY.md routes to private vulnerability reporting | Must | 1 (owner setting) |
 
+
+### T11. Authentication and authorization
+
+| ID | Threat | Controls | Priority | Phase |
+| --- | --- | --- | --- | --- |
+| T11.1 | A new route ships without an authorization check and anyone who reaches the port can use it | One route policy registry; every route declares its role; deny by default; a test enumerates all routes and fails on any route without a policy | Must | 13 |
+| T11.2 | A viewer calls an admin action directly on the API (broken function-level authorization) | Authorization only in the engine (`Depends(require(Role.ADMIN))`); the UI hides admin actions but is never the control; every route tested as anonymous, viewer and admin | Must | 13 |
+| T11.3 | An id in a path names an object the caller may not touch (broken object-level authorization), or a secret of another environment | Object checks on every id in a path (job, deployment, environment, customer, add-on version); a secret belongs to exactly one environment or client and cannot be selected from another | Must | 13, 17 |
+| T11.4 | Password guessing, credential stuffing or user enumeration | Argon2id at or above OWASP parameters; length 12 to 128 and a common-password list; lockout with exponential backoff per account and per client IP; one generic failure message; constant-time comparison | Must | 13 |
+| T11.5 | Session theft, fixation or a session that outlives a role change | Opaque 256-bit IDs stored hashed; `__Host-pmx_session` with `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`; idle 30 min and absolute 12 h; rotated on login and role change; all sessions revoked on password, MFA or role change; "sign out everywhere" | Must | 13 |
+| T11.6 | CSRF from a logged-in browser | The v1 custom-header and Origin checks (built, T8.3), extended to the configured public origins on every state-changing request | Must | 5 (built for localhost), 13 |
+| T11.7 | A stolen or long-lived API token | Prefix `pmxt_` (secret scanners can match it), 32 random bytes, shown once, stored as SHA-256, expiry at most 90 days, role no higher than the creator's, last-used time, revocable; mutating CLI commands go through the API | Must | 13 |
+| T11.8 | First-run takeover through default credentials or a setup race | No default credentials; a one-time setup token (60 minutes, single use) written to the data volume, only its path logged | Must | 13 |
+| T11.9 | MFA bypass: reused TOTP codes or plain-text recovery codes | TOTP (RFC 6238) with hashed one-time recovery codes; "require MFA for admins" on by default for local admins | Must | 13 |
+| T11.10 | An admin approves their own risky deployment | Accepted by owner decision (D6, R14); four-eyes per environment (off by default); every approval audited with actor, time and IP | Should | 18 |
+| T11.11 | Security events are not recorded, or are edited afterwards | `auth_events` append-only by trigger; ledger hash chain with `parsemaxxing ledger verify`; viewers can read the audit log, nobody can edit it | Must | 12 (chain), 13 |
+| T11.12 | The direct-database CLI bypasses roles | Direct-database CLI only for `migrate` and the break-glass `parsemaxxing admin reset`, which needs the database owner credentials on the host | Must | 13 |
+
+### T12. LDAP
+
+| ID | Threat | Controls | Priority | Phase |
+| --- | --- | --- | --- | --- |
+| T12.1 | Bind passwords sniffed or a directory impersonated on the network | LDAPS (636) or StartTLS required, plain LDAP refused; certificate checked against an uploaded CA bundle; hostname checked | Must | 14 |
+| T12.2 | LDAP filter injection through the username (for example `*)(uid=*`) | Username escaped per RFC 4515 (`escape_filter_chars`); the search must return exactly one entry, otherwise the login fails | Must | 14 |
+| T12.3 | Unauthenticated bind: an empty password "succeeds" | An empty password is refused before any bind | Must | 14 |
+| T12.4 | A user keeps a role after leaving a group, or gets access with no mapped group | Groups read and mapped at every login, highest mapped role wins; no mapped group means no access; LDAP sessions end at the absolute timeout | Must | 14 |
+| T12.5 | The service bind password leaks through logs or error text | Bind password in the vault; never logged; users see generic LDAP errors, details go to the audit log without the password | Must | 14 |
+| T12.6 | A directory outage locks every admin out | A local break-glass admin always works; the UI shows which accounts are local | Must | 14 |
+| T12.7 | "Test a user lookup" reveals other users' attributes | Shows each step's result only | Should | 14 |
+| T12.8 | LDAP logins carry no second factor | Optional TOTP enrolment in Parsemaxxing for LDAP users (setting) | Should | 14 |
+
+### T13. Secrets
+
+| ID | Threat | Controls | Priority | Phase |
+| --- | --- | --- | --- | --- |
+| T13.1 | A database dump or backup exposes stored secrets | AES-256-GCM envelope encryption with `cryptography` only; a random data key per secret, wrapped by the KEK; 96-bit random nonces; backups encrypted with `age` | Must | 12 |
+| T13.2 | A ciphertext is copied to another row or purpose and decrypted there | AAD binds secret id, purpose and version; a moved ciphertext fails to decrypt (test) | Must | 12 |
+| T13.3 | A tampered ciphertext is used | GCM authentication fails closed (test) | Must | 12 |
+| T13.4 | The KEK leaks | 32 random bytes in `secrets/pmx_kek` (created by `make setup`, mode 0400, git-ignored), mounted as a Docker secret into the engine only, never the web container, never in `.env` or the database; `parsemaxxing secrets rotate-kek` rewraps every data key | Must | 12 |
+| T13.5 | The API returns a secret, or a viewer sees one | Write-only fields that show only "set" and the last update time; every model and dataclass that can hold a secret redacts it in `repr` | Must | 12, 13 |
+| T13.6 | Secrets reach logs, the ledger, prompts, error messages or settings history | Redaction (built for v1 settings, T7.2); `settings_history` stores only "changed" for secrets; no credential ever in a prompt | Must | 12 |
+| T13.7 | Secrets visible through container environment variables or `/proc` | Only bootstrap values in the environment; everything else from the vault at the moment of use; `/proc` exposure noted in the baseline | Must | 12 |
+| T13.8 | Losing the KEK loses every secret | The setup guide says so in bold and gives the backup steps; the KEK is backed up separately from the encrypted dumps | Must | 12 |
+| T13.9 | Expired Splunk or API tokens break work, or long-lived ones stay valid | Expiry tracked per credential; warnings at 14 and 3 days on the environment health page and in analytics | Should | 12, 17 |
+| T13.10 | Relay SSH private keys are copied out | Generated per environment and host, private half only in the vault, never shown or downloadable; rotation flow; removed with the environment | Must | 18 |
+
+### T14. Knowledge poisoning
+
+| ID | Threat | Controls | Priority | Phase |
+| --- | --- | --- | --- | --- |
+| T14.1 | An imported document or reference add-on carries instructions ("always add `SEDCMD-…`") that steer an agent | Retrieved chunks passed as `<reference id=…>` data blocks; the gate and the Validator decide, never the knowledge base; poisoning test: an imported doc with instructions changes nothing the gate allows | Must | 20 |
+| T14.2 | A tampered offline pack is imported | Packs signed with an admin key whose public half is registered; signature and every file hash checked before quarantine; a tampered pack is refused | Must | 20 |
+| T14.3 | A hostile PDF exploits the parser or exhausts memory | Pinned, maintained PDF library; parsing in a sandboxed worker with no network; size and page caps (100 MB, 3,000 pages by default); no OCR | Must | 20 |
+| T14.4 | A hostile reference add-on, CIM package or spec bundle (path traversal, links, oversized members, scripts) | Safe-tar rules; only `default/*.conf`, `metadata/` and `README` read; nothing executed; stored only in this install | Must | 17c, 20 |
+| T14.5 | A crafted spec bundle makes the gate accept a key it should refuse | The gate's typed key allowlist stays in code; the per-version key table can only block keys (missing in the target version) or warn (deprecated), never add one | Must | 17c |
+| T14.6 | Imported content goes live without review | Imported sources quarantined until an admin approves them; content hashes; re-index on change | Must | 20 |
+| T14.7 | Fix memory offers a bad fix again | Only fixes that passed the stage are indexed; a fix later rejected at approval or rolled back is marked and never offered | Must | 20 |
+| T14.8 | Knowledge leaks one customer's data to another | No samples or customer field values in the knowledge base (fix memory holds conf changes and check messages only); the approved add-ons tier and fix memory can be limited per customer | Must | 20 |
+| T14.9 | Splunk documentation or licensed Splunk files end up in the repository | Nothing copied or crawled; imported content stored only in the database; parser tests use spec-format files written for the tests; appsec review | Must | 11, 20 |
+
+### T15. Production deployment
+
+| ID | Threat | Controls | Priority | Phase |
+| --- | --- | --- | --- | --- |
+| T15.1 | Code outside the deployment pipeline writes to production | Only `engine/parsemaxxing/deploy/` holds a write path to a non-sandbox Splunk; a test fails on any other; test deploys go only to sandboxes (D1) | Must | 18 |
+| T15.2 | A package other than the approved one reaches production | Every production write bound to an approval naming the package SHA-256, the environment and the target tiers; hash re-checked before delivery and by the relay | Must | 18 |
+| T15.3 | An approval is replayed for another environment or twice | Approval names the environment; deployment transitions are `UPDATE … WHERE status = …` with row counts; approve and deploy are idempotent | Must | 18 |
+| T15.4 | The package reaches indexers or a universal forwarders' server class, spreading the parser everywhere | Indexers are never a target (D11); the planner checks each server class's clients; the relay's `ds-map` refuses a server class with universal forwarder clients (tests) | Must | 18 |
+| T15.5 | A stolen relay key gives a shell on a Splunk host | `authorized_keys` line with `from=`, a forced command and `restrict`; fixed verbs only; no interactive shell anywhere in Parsemaxxing; no passwords | Must | 18 |
+| T15.6 | Someone impersonates the relay host | SSH host key pinned at registration (fingerprint confirmed by the admin); every call refused after a change until an admin re-confirms | Must | 18 |
+| T15.7 | The relay's Splunk login leaks on the host | Sent on the SSH channel's stdin for one call; never on a command line, in an environment variable, a file, the relay log or the console | Must | 18 |
+| T15.8 | Injection into relay verbs through app name, version or server class | The relay validates the app name pattern and the hash, uses argument lists, extracts with the TA builder's safe-tar rules, refuses every other verb (tests) | Must | 18 |
+| T15.9 | A production deploy token has more power than needed | Handoff mode is the default and needs no write credential; managed mode uses a per-node `parsemaxxing_deploy` token with the narrowest capabilities the lab proves (Q12); the admin creates accounts from a generated script, Parsemaxxing never creates roles in production (R8) | Must | 11 (lab), 17, 18 |
+| T15.10 | A failed rollout leaves tiers out of step | Heavy forwarders first, then search heads; each tier verified before the next; a failure stops the rollout and offers rollback; no silent retry of a push | Must | 18 |
+| T15.11 | The live console or a copied command leaks a secret | Output escaped and secret-masked before display; copied commands use placeholders such as `<your token>` | Must | 18 |
+| T15.12 | A revert deletes newer versions or rewrites history | Versions immutable and never deleted (trigger, no delete path, test); a revert installs an older version's stored bytes through the pipeline | Must | 17b, 18 |
+| T15.13 | A stored package is tampered with | Content-addressed write-once store; hash verified on every read; a mismatch blocks use, marks "integrity failed" and raises an audit alert | Must | 17b |
+| T15.14 | A forged drift webhook triggers work | Per-environment webhook token in the vault and a source-IP allowlist; the token is in the URL only because Splunk cannot send headers (documented exception) | Must | 22 |
+| T15.15 | A package tested on one Splunk version is deployed to another where a key behaves differently | Sandbox and production versions compared (warning, or blocking per environment); the plan re-checks the package against the production version's key table | Should | 17c, 18 |
+
+### T16. Tenant isolation (MSP shared environments)
+
+| ID | Threat | Controls | Priority | Phase |
+| --- | --- | --- | --- | --- |
+| T16.1 | A search run for one customer reads another customer's indexes on the shared search heads | Code-owned base search restricted to the customer's index allowlist; a request for an index outside it is refused before any search; adversarial tests | Must | 17, 21 |
+| T16.2 | SPL in the pipeline escapes the base search (`index=` terms, subsearches, macros, `| rest`, `tstats`, `union`) | The v1 search guard (built, T1.2: command allowlist, subsearches and macros refused, result-set-starting commands blocked) reused for the tenant base search | Must | 3 (built for the test index), 17 |
+| T16.3 | One customer's index-time package lands on another customer's heavy forwarders | Every HF and DS in a shared environment belongs to exactly one customer (`nodes.customer_id`); the plan includes only that customer's HFs (test) | Must | 17, 18 |
+| T16.4 | A search-time change on the shared search heads breaks another customer's fields | Shared search head check: the new settings are previewed, read-only, on recent events of every customer sending that sourcetype; any customer that would lose or change fields blocks the search head part | Must | 18 |
+| T16.5 | An allowlist pattern is too broad or overlaps another customer's (`cus_acme*` also matches `cus_acmecorp_*`) | Allowlists derived from the environment's naming convention with a `<client>` placeholder; exceptions edited by an admin and audited; overlap between customers' allowlists to be refused (control to add to design.md 7.1) | Must | 17 |
+| T16.6 | A customer's data goes to a provider its policy forbids | Egress policy checked at job start; a no-hosted customer is served only by `on_prem` providers; a fallback provider is used only if the policy allows it | Must | 16 |
+| T16.7 | One customer's configuration or secret is used for another | Settings reads take the environment and client explicitly; no "current environment" global; secrets bound to one scope; clone copies no secrets | Must | 12, 17 |
+
+### T17. Discovery and real-log exposure
+
+| ID | Threat | Controls | Priority | Phase |
+| --- | --- | --- | --- | --- |
+| T17.1 | Discovery keeps the production events it looked at | Discovery stores only counts and verdicts; events become samples only when an admin creates a job from a finding; samples encrypted at rest | Must | 21 |
+| T17.2 | Real samples reach a hosted model unmasked | Masking at one choke point (the LLM client); secret scan of samples before any model call; egress policy per customer | Must | 16, 21 |
+| T17.3 | Masking is reversible or leaks through its map | Per-job HMAC key from the vault; format-preserving pseudonyms into documentation ranges; the map stored encrypted and never sent anywhere; property tests | Must | 21 |
+| T17.4 | Real logs stay longer than 30 days somewhere (files, rows, approval reports, evidence, console transcripts, masking maps, the sandbox index) | Purge job at least hourly, idempotent, logs counts and ids only; reports rewritten with masked lines; per-client setting 0 to 30 days, never more; `pmx_` index `frozenTimePeriodInSecs` at most 30 days; purge test that searches database and files for a planted marker | Must | 21 |
+| T17.5 | A masked regression set still holds identifiers or secrets | Stricter masking pass for unclassified free text; the version's checks must pass on the masked copy and a secret scan must find nothing, otherwise the set is not stored | Must | 17b, 21 |
+| T17.6 | Raw production samples are shown more widely than needed | Viewers see raw samples by default (owner decision, R16); every view of a production customer's raw samples is audited; "mask raw samples for viewers" available | Should | 13, 21 |
+| T17.7 | Discovery searches load a production search head | Fixed SPL, recent window, `head 500`, timeouts; discovery is manually triggered only (no scheduled scans) | Should | 21 |
+| T17.8 | Injection through discovered or drift samples | Same data framing as uploads; injection fixtures for each new input path in the adversarial suite | Must | 21, 22 |
+| T17.9 | Backups keep real logs past 30 days | Backup retention guidance of 30 days at most in `docs/setup.md`; backups encrypted | Must | 12, 21 |
+| T17.10 | Real samples collected for local testing are committed | `samples-local/` git-ignored and blocked by a pre-commit check and a CI check on the path and on content hashes; tests that use them marked `local_only` and skipped in CI | Must | 12 |
+
+### T18. Server-side request forgery
+
+| ID | Threat | Controls | Priority | Phase |
+| --- | --- | --- | --- | --- |
+| T18.1 | A URL import reaches internal services or cloud metadata | SSRF-safe fetch helper: scheme allowlist, DNS resolved first and private, loopback, link-local and metadata ranges refused, the connection made to the checked address, no redirect to another host, size and time caps; URL import off by default and limited to domains an admin adds | Must | 20 |
+| T18.2 | An outbound webhook or event forward is pointed at an internal service | Same helper for every outbound URL a user can influence | Must | 19, 22 |
+| T18.3 | Admin-set Splunk, LDAP or LLM URLs are used to probe the internal network | These may be private by design, so they are admin-only, validated (scheme, host, port), audited, and connection tests return step results without response bodies | Should | 14, 16, 17 |
+| T18.4 | Topology auto-discovery adds a node the attacker controls | Every proposed node needs an admin's confirmation; TLS verified against the node's CA | Must | 17 |
+| T18.5 | Fetched content is treated as instruction | Fetched content is imported knowledge: quarantined, then passed as data (T14) | Must | 20 |
+
 ## Mitigations and guardrail mapping
 
-The tables above are the mapping: every design.md Must row appears with its phase. Phase 4 adds a column naming the adversarial test for each Must row, and that column becomes the acceptance check.
+The tables above are the mapping. Phases 0 to 10 are v1; Phases 11 to 25 are the v2 plan in [build-plan.md](build-plan.md).
 
 | Phase | Threats it closes |
 | --- | --- |
-| 0 (done) | T7.1, T9.1, T9.2 (Python), T9.5 |
-| 1 | Decisions for T2.11, T7.5; scoped accounts T7.4; owner setting T10.3 |
-| 2 | T1.1 (framing), T2.1, T2.15, T3.1, T4.3, T4.4, T5.1, T5.4 (naming), T5.6 (timeouts), T6.6 (per-run ceiling), T7.2, T7.4 (token placement) |
-| 3 | T1.2, T1.3, T1.5, T2.10 (`test_regex`), T2.14, T4.2 |
-| 4 | T1.1 (gate), T2.2–T2.12, T3.2–T3.5, T4.1, T4.5, T5.2–T5.5, T6.2 |
-| 5 | T1.4, T2.15, T3.6, T3.7, T5.7, T6.1, T6.3, T6.4, T6.6, T8.3, T8.5, T9.4 (engine), T8.2 (localhost binding only) |
-| 6 | T8.1, T8.3–T8.6, T9.2 (npm), T9.4 (web) |
-| 7 | T4.6, T5.10–T5.13 |
-| post-7 (no manifest) | T4.7, T4.8 |
-| 9 | T2.13, T5.5 (routing) |
-| 10 | T9.3, T9.6, T9.7: not done, see R12 |
-| Not built | T6.5 (partly), T7.3 (partly), T8.2 login (R1), T2.13 and T5.5 routing (Phase 9) |
+| 0 to 7, post-7 (v1, built) | T1 to T10 except the rows listed below |
+| 10 (v1) | T9.3, T9.6, T9.7: not done, moved to Phase 12 (R12) |
+| 11 | T14.9 (rule), lab answer for T15.9 (Q12); threat model v2 and security baseline written |
+| 12 | T9.3, T9.6, T9.7, T11.11 (hash chain), T13.1 to T13.9, T16.7 (settings scopes), T17.9, T17.10; R2 default, R10 networks, R12 |
+| 13 | T8.2 login, T11.1 to T11.9, T11.11, T11.12, T13.5, T17.6 (audit); R1, R10 |
+| 14 | T12.1 to T12.8, T18.3 (LDAP URLs) |
+| 16 | T6.5 (provider and model per call), T7.3 (egress), T16.6, T17.2 (egress), T18.3 (provider URLs) |
+| 17 | T11.3, T13.9, T15.9 (accounts), T16.1, T16.2, T16.3, T16.5, T16.7, T18.3, T18.4; R2 |
+| 17b | T15.12, T15.13, T17.5 |
+| 17c | T14.4 (CIM and spec bundles), T14.5, T15.15 |
+| 18 | T11.10, T13.10, T15.1 to T15.12, T15.15, T16.3, T16.4; R8 for production |
+| 19 | T18.2 (event forwarding) |
+| 20 | T14.1 to T14.8, T18.1, T18.5 |
+| 21 | T7.3 (masking, secret scan), T16.1 (discovery), T17.1 to T17.8 |
+| 22 | T15.14, T17.8 (drift samples), T18.2 (webhooks) |
+| 23 | T2.13, T5.5 and T5.8 routing rows, T8.4 routing |
+| 24 | Verification of every row: built, or a residual risk accepted by the owner |
 
-### Must rows and their tests (Phase 4 acceptance)
+### v1 Must rows and their tests (Phase 4 acceptance, kept current)
 
 Every Must row of design.md "Guardrails and security", with the test that proves it. "Adv." is `engine/tests/adversarial/test_adversarial.py`; other paths are under `engine/tests/`. Rows whose code belongs to a later phase name that phase. `make test` and CI run all of them.
 
@@ -239,7 +395,7 @@ Every Must row of design.md "Guardrails and security", with the test that proves
 | `EVAL-`/`FIELDALIAS-` may not target core fields | Adv. `test_conf_gate_blocks_forbidden_props`, `test_final_gate_rechecks_values` (every `AS`/`ASNEW` target); `guardrails/test_gate_search_time.py::test_cim_blocks` | Built |
 | No `[default]`, broad `[source::]`, `[host::*]` | Adv. `test_conf_gate_blocks_broad_or_foreign_stanzas`, `test_default_or_non_sourcetype_stanzas_never_promote`, `test_promotion_refuses_an_existing_sourcetype` (no merging into `syslog`, `json` or another app's sourcetype) | Built |
 | CSV lookups inside the TA only | Adv. `test_conf_gate_blocks_forbidden_props` (`LOOKUP-` refused: Parsemaxxing writes no lookups yet, so none can point outside the TA) | Built (stricter) |
-| Routing exception on generic stanzas | — | Phase 9 (future enhancement); `TRANSFORMS-` refused outright until then |
+| Routing exception on generic stanzas | — | Phase 23 (mixed-feed routing, old Phase 9); `TRANSFORMS-` refused outright until then |
 | Key allowlist with typed values + fail-closed post-install warning check (replaces btool) | `guardrails/test_gate_index_time.py`; `validator/test_validator_index_time.py::test_warning_check_fails_closed`, `test_warning_check_error_fails_the_attempt` | Built |
 | Regex catastrophic-backtracking test | `guardrails/test_gate_index_time.py::test_catastrophic_backtracking_is_blocked`; `guardrails/test_gate_search_time.py::test_extraction_blocks`; `tools/test_search_guard_and_regex.py::test_regex_tool_times_out_instead_of_hanging` | Built |
 | Reject newlines; one escaping writer | Adv. `test_newline_injection_cannot_add_a_stanza`; `ta_builder/test_ta_builder.py::test_writer_rejects_*` | Built |
@@ -258,7 +414,7 @@ Every Must row of design.md "Guardrails and security", with the test that proves
 | Size-limited test index; cleanup only of indexes the job created | One shared, admin-created, size-capped index; the engine creates and deletes no indexes (Q9) | Built (by design) |
 | Code rejects ingest targets not starting with `pmx_` | Adv. `test_ingest_outside_pmx_is_refused`; `tools/test_splunk_client.py::test_ingest_refuses_non_pmx_indexes` | Built |
 | Search command allowlist, 50 rows, code-owned base search | Adv. `test_forbidden_search_commands`; `tools/test_search_guard_and_regex.py` | Built |
-| Rollback removes every TA file | The test app is uninstalled at the end of every run, so a rejected run leaves no TA; reject is `awaiting_approval → rejected` (`api/test_api.py::test_approve_is_refused_unless_awaiting_approval`) | Built (routing rollback: Phase 9) |
+| Rollback removes every TA file | The test app is uninstalled at the end of every run, so a rejected run leaves no TA; reject is `awaiting_approval → rejected` (`api/test_api.py::test_approve_is_refused_unless_awaiting_approval`) | Built (routing rollback: Phase 23) |
 | Approval bound to the `.tgz` SHA-256 | Adv. `test_approval_needs_the_exact_hash`, `test_one_changed_byte_after_approval_blocks_promotion`; promotion hashes and renames the same bytes (one read), and packages are reproducible (`test_packages_are_reproducible`) | Built |
 | State transitions enforced | `ledger/test_queue.py::test_transitions_need_the_expected_state`, `test_db_refuses_a_skipped_transition`, `test_approve_is_refused_unless_awaiting_approval`; Adv. `test_replayed_approve_is_a_no_op` | Built: PostgreSQL `UPDATE … WHERE status` with row counts (R9 closed) |
 | Sourcetype has 0 events before ingest; never reused | `orchestrator/test_run.py::test_leftover_events_are_never_reused`, `test_fix_loop_feeds_evidence_back` | Built |
@@ -279,22 +435,27 @@ Every Must row of design.md "Guardrails and security", with the test that proves
 | Manifests: uploaded ones checked, automatic ones only from fixtures by content hash (T4.8) | `api/test_api.py::test_a_log_alone_is_enough`, `::test_a_supplied_manifest_must_be_valid_and_names_safe`, `::test_untrustworthy_manifests_are_refused` | Built (post-7) |
 | Updates without a manifest reproduce production exactly (T5.13) | `orchestrator/test_update.py::test_old_samples_without_a_manifest_must_reproduce_production_exactly`; `validator/test_mechanical.py::test_updates_compare_with_productions_own_output_exactly` | Built (post-7) |
 
+
 ## Residual risks
 
-| ID | Risk | Why accepted | Revisit |
-| --- | --- | --- | --- |
-| R1 | No login or roles in the hackathon build (Should only); anyone on the host can use the UI | Ports bind to `127.0.0.1`; single trusted operator (A1, A2) | Before any shared or networked deployment |
-| R2 | TLS verification to Splunk REST is off in the lab (self-signed), so a man-in-the-middle on the lab LAN could capture tokens, including the deploy token, which is effectively admin (T7.4) | Deferred by design; traffic stays on the Docker network or an isolated lab LAN | Before production use, or any shared network |
-| R3 | Prompt injection can still make an agent propose bad config | The gate checks every value deterministically, and Splunk judges; injection can waste credits but not reach Splunk unchecked | Ongoing; adversarial suite grows with each bypass found |
-| R6 | Python regex differs from Splunk PCRE, so `test_regex` can pass a regex Splunk handles differently | Splunk's own Validator run stays the real proof | — |
-| R7 | Hosted model sees sample content | Synthetic logs only in the hackathon; on-prem mode and masking for real logs | When real logs are used |
-| R8 | The deploy role needs `admin_all_objects` to install apps from a path (lab-findings Q9), so the deploy token is near-admin: a stolen token means code execution as the splunk user on the Splunk host (any app install, scripted inputs), writes into any index and deletion of any app | Token lives only in the orchestrator process, never with an agent, prompt, web process or ledger; short token expiry; these limit what the engine does, not what a stolen token can do. Code validates every app name and package path (T7.4, T5.9) and `pmx_` ingest target before each call; the engine never creates or deletes indexes; lab-only account | Before any non-lab Splunk; look for a narrower install path |
-| R9 | ~~Until Phase 5, run state is a JSON record in a private runs folder; a process running as the engine user could forge a record~~ **Closed in Phase 5:** run state is in PostgreSQL, and every transition is a guarded `UPDATE … WHERE status = <allowed previous>` with the row count checked | — | — |
-| R10 | Containers on the docker-compose network (Splunk) can reach the engine API, including `/admin/kill`, because `engine` is an allowed Host and the build has no login (R1) | Splunk is the operator's own lab instance; the API changes no Splunk state by itself and every change still needs the CSRF header; the kill switch only stops work | With login and an approver role (Should), or a separate network for the engine |
-| R11 | `npm audit` in CI covers only the packages the web UI ships (`--omit=dev`). A moderate advisory (GHSA-g3hv-75wg-m249, `minimatch` < 11.0.1, a denial of service through crafted glob patterns) sits in ESLint's dev dependencies; the only fixed release is a new major version published on Oct 27, 2026, younger than the two-week pinning rule | ESLint runs only on developer machines and in CI, over this repository's own files, never on user input; nothing from it ships in the UI image | When the fixed `minimatch` line is two weeks old (Nov 10, 2026), or if a dev-dependency advisory reaches high |
+Every residual risk has an owner and a revisit point. Phase 24 needs each one closed or accepted again by the owner in writing.
 
-| R12 | Base images are pinned by tag, not digest (`splunk/splunk:10.6.1`, `postgres:17.11-alpine`, `python:3.12-slim`, `node:24-slim`), the engine image runs an unpinned `pip install .`, and the CIM add-on in `lab/` is installed without a checksum check (T9.3, T9.6, T9.7 were planned for Phase 10). The bootstrap does require exactly one regular file, logs the installed CIM version, and the folder is mounted read-only | The digests could not be fetched from the build host; `lab/` is filled only by the operator from Splunkbase | Before the final submission: pin the four images by digest (`docker pull` prints them) and the CIM package's SHA-256 |
-| R13 | For a log without a truth manifest, meaning is not proven: a timezone a human states wrongly, a field mapped to the wrong but allowed CIM field, or a value mapped to the wrong allowed value passes every check | No tool can know a device's meaning from its text; the approval report lists every such decision with real values and counts, and nothing installs without a hash-bound human approval. Generator samples keep the exact answer-key checks | If a vendor's field documentation can be loaded as a second, independent source |
+| ID | Risk | Why accepted | Owner | Revisit |
+| --- | --- | --- | --- | --- |
+| R1 | **Open today.** No login or roles: anyone who reaches the UI or API on the host can upload, approve and promote | Ports bind to `127.0.0.1`; single trusted operator (A1, A2). The README says the platform must not be exposed beyond localhost before Phases 12 to 14 | Repository owner | **Closes in Phase 13** (local accounts, sessions, MFA, API tokens, route policy registry with a route-inventory test); LDAP follows in Phase 14 |
+| R2 | **Open today.** TLS verification to Splunk REST is off for the self-signed lab certificate, so a man-in-the-middle on the lab network could capture tokens, including the near-admin deploy token (T7.4) | Traffic stays on the Docker network or an isolated lab network; no production Splunk is reachable from v1 | Repository owner | **Phase 12** makes verification the default for every outbound TLS connection; **closes in Phase 17** with a CA bundle per node and an admin-only, audited per-node "verify off" toggle shown as a warning everywhere that node appears |
+| R3 | Prompt injection can still make an agent propose bad config | The gate checks every value deterministically, and Splunk judges; injection can waste budget but not reach Splunk unchecked | Repository owner | Ongoing; the adversarial suite grows with each new input path (discovery, drift, knowledge) |
+| R6 | Python regex differs from Splunk PCRE, so `test_regex` can pass a regex Splunk handles differently | Splunk's own Validator run stays the real proof | Repository owner | — |
+| R7 | **Open today.** A hosted model sees sample content unmasked | Only synthetic logs are used with v1; on-prem mode exists | Repository owner | **Closes in Phase 21** (masking at the LLM client, secret scan); the egress policy per customer lands in Phase 16. Real logs must not go to a hosted model before Phase 21 |
+| R8 | **Open today.** The sandbox deploy role needs `admin_all_objects` to install apps from a path (lab-findings Q9), so the deploy token is near-admin: a stolen token means code execution as the splunk user on the Splunk host, writes into any index and deletion of any app | Token lives only in the orchestrator process, never with an agent, prompt, web process or ledger; 7-day expiry; app name, package path and `pmx_` target checked before each call; sandbox-only account | Repository owner | **Production: closed by design in Phase 18**: handoff mode (default) holds no write credential, managed mode uses a per-node token with the narrowest capabilities the Phase 11 lab probe (Q12) proves, and SHC and DS delivery go through the relay's fixed verbs. **Sandbox: stays accepted**; revisit in Phase 18 with the Q12 result, and again in Phase 24 |
+| R9 | ~~Until Phase 5, run state is a JSON record in a private runs folder; a process running as the engine user could forge a record~~ **Closed in Phase 5:** run state is in PostgreSQL, and every transition is a guarded `UPDATE … WHERE status = <allowed previous>` with the row count checked | — | — | — |
+| R10 | **Open today.** Containers on the docker-compose network (Splunk) can reach the engine API, including `/admin/kill`, because `engine` is an allowed Host and there is no login (R1) | Splunk is the operator's own lab instance; the API changes no Splunk state by itself and every change still needs the CSRF header; the kill switch only stops work | Repository owner | **Phase 12** separates the Docker networks (Splunk cannot reach the engine API); **closes in Phase 13** when every route needs a role |
+| R11 | `npm audit` in CI covers only shipped packages (`--omit=dev`). A moderate advisory (GHSA-g3hv-75wg-m249, `minimatch` < 11.0.1, denial of service through crafted glob patterns) sits in ESLint's dev dependencies; the lockfile still resolves `minimatch` 3.1.5 | ESLint runs only on developer machines and in CI over this repository's own files, never on user input; nothing from it ships in the UI image | Repository owner | The two-week date (Nov 10, 2026) has passed: update in Phase 12 with the dependency lock work, or earlier if the advisory reaches high |
+| R12 | **Open today.** Base images are pinned by tag, not digest (`splunk/splunk:10.6.1`, `postgres:17.11-alpine`, `python:3.12-slim`, `node:24-slim`); the engine image runs an unpinned `pip install .`; the CIM add-on in `lab/` is installed without a checksum check (T9.3, T9.6, T9.7). The bootstrap does require exactly one regular file, logs the CIM version, and mounts the folder read-only | `lab/` is filled only by the operator from Splunkbase | Repository owner | **Closes in Phase 12**: images pinned by digest (including the `pgvector/pgvector` image that replaces `postgres`), Python dependencies locked with hashes (`--require-hashes`), SBOM and Trivy scan in CI; the CIM package checksum check moves to the CIM library (Phase 17c) |
+| R13 | For a log without a truth manifest, meaning is not proven: a timezone a human states wrongly, a field mapped to the wrong but allowed CIM field, or a value mapped to the wrong allowed value passes every check | No tool can know a device's meaning from its text; the approval report lists every such decision with real values and counts, and nothing installs without a hash-bound human approval | Repository owner | Phase 20 (references shown in the approval report); otherwise when a vendor's field documentation can be loaded as a second, independent source |
+| R14 | Any admin can approve any deployment, including one they requested (D6) | Owner decision: small teams have one admin; every approval names the hash and environment and is audited; four-eyes per environment is available | Repository owner | Phase 18, and Phase 24 |
+| R15 | No per-customer scoping of users: every viewer and admin sees every customer and environment (D6) | Owner decision for v2: the users are the MSP's own Splunk team | Repository owner | Phase 25 (onboarding governance design) |
+| R16 | Viewers see raw samples by default, including real production logs (7.3) | Owner decision: viewers are usually the same team that runs Splunk; every view is audited; "mask raw samples for viewers" exists; real data is gone after 30 days at most | Repository owner | Phase 21, and Phase 24 |
 
 ## Review history
 
@@ -308,5 +469,5 @@ Every Must row of design.md "Guardrails and security", with the test that proves
 | Oct 28, 2026 (Phase 5) | appsec subagent | API, queue and container review. **High H1, fixed:** CSRF, where a cross-site multipart upload created jobs (T8.3); non-GET requests now need `X-Parsemaxxing: 1` and a matching Origin. **Medium, all fixed:** M1, an empty or foreign manifest `events` list made the CIM stage pass with zero checks; manifests are now checked against the epochs, and an empty report never passes. M2, upload storage paths collided; uploads now go under fixed per-job names. M3, no line-length or token-estimate cap; now 10,000 characters per line and the run ceiling. M4, unbounded request bodies; now capped before parsing. M5, the engine connected as the database superuser; it now uses the `parsemaxxing_app` role (SELECT/INSERT on the ledger only), and the owner account is used only by `migrate`. M6, published ports; A1 and T9.4 updated, R10 added. **Low, fixed:** deeply nested manifest JSON, NUL anywhere, final statuses in duplicate detection, resume skipping review, heartbeat errors, kill switch re-checked after a slot wait, `--local` documented, `cap_drop` and a read-only root filesystem, at most 20 event streams. **Deferred:** a hashed dependency lock for the engine image (T9.6, Phase 10) |
 | Oct 28, 2026 (Phase 6) | appsec subagent | UI review. **High H1, fixed:** DNS rebinding. The web proxy derived the allowed Origin from the request's own Host, so a rebinding page could read jobs and approve, and nothing in the UI checked Host (T8.5). Now `proxy.ts` has a Host allowlist on every request, the API route has a fixed Origin list, and encoded separators are refused. **Medium M1, fixed:** `script-src 'unsafe-inline'`, replaced by a per-request nonce with `strict-dynamic`. **Low, fixed:** same-second events got another event's fields (raw and fields now come from one row); UTF-16 highlight offsets; a missing report crashed the page; report errors no longer fail a run; job ids validated in the client; no redirects followed; more lint bans; stronger e2e tests (Host, POST variants, a positive control, tab order, more XSS surfaces); `.env*` in the Docker build ignore; COOP; timeline capped. Clean: XSS sinks, offset handling, the path allowlist, header forwarding, SSE, no client-side logic, dependencies, containers. **Also found while fixing:** a Phase 5 test changed the live `parsemaxxing_app` password (roles are server-wide); it now uses `SET ROLE` |
 | Oct 28, 2026 (Phase 7) | appsec subagent | Parser update review. **High H1, fixed:** the new `TIME_FORMAT` check ran a pattern built from the model's format on stdlib `re` with no timeout, so `%N%N%N…` against digit runs could hang a worker for hours (the GIL starves its heartbeat); the check now runs on `regex` with one deadline and fails closed, and the gate refuses side-by-side variable-width directives and more than 12 directives. **Medium, both fixed:** M1, regression samples were re-read from `jobs.sample_path`, which for CLI jobs was any outside path that could become a link; the CLI now keeps a private copy like uploads, and an update reads samples only inside the runs folder, with `O_NOFOLLOW`, and only if their content (and manifest) hashes still match intake. M2, rollback and in-place promotion of the same TA were not serialised and Splunk changed before the registry; both now run under one advisory lock per TA, and a fresh build of a registered TA is refused before install. **Low, fixed:** unknown `TIME_FORMAT` directives fail instead of passing, and more directives are known (L1); one deadline for the whole check (L2); after an in-place install the effective settings are read back and a changed key not in effect fails the smoke test (L3; overrides in `transforms.conf`/`eventtypes.conf` are not checked, residual); the engine role may update only `current_version` (L4, migration 004); any tag-like text inside a data block is escaped so it cannot pose as another block (L6). **Not changed:** L5 (the Parsemaxxing marker is public; the registry and installed-version checks come first). Clean: rollback stays inside the TA, no overwrite of a non-Parsemaxxing app, `local/` never written, SQL, the source filter, registry data in names and paths, API, XSS |
-| Oct 31, 2026 (Phase 10) | appsec subagent | Judges' setup and final public sweep. No Critical or High. gitleaks over the full history (46 commits): clean; no private IPs, internal names or real companies; `.env` never tracked; every published port on 127.0.0.1, 8089 unpublished. **Medium, both fixed:** M1, a JWT-shaped literal in a test would have failed the secret scan (built at runtime now); M2, service tokens lived 90 days, against T7.4's short expiry (7 days now; every `make up` renews them). **Low, fixed:** old tokens are deleted only when their `sub` is that user, and a failed delete stops the bootstrap (L1); the CIM package must be exactly one regular file, and its version is logged (L2, checksum pinning moved to R12); `.env` is written atomically with a 0600 temporary file under umask 077 (L3); the test index must match `pmx_[a-z0-9_-]+` (L4); T9.3/T9.6/T9.7 moved to R12 (L5). **Owner:** L6, three web-UI merge commits carry the owner's personal email (T10.2). Token path checked: container stdout → shell variable → `env_set.py` stdin → `.env`; never in process arguments, logs or the terminal |
+| Oct 31, 2026 (Phase 10) | appsec subagent | Setup review and final public sweep. No Critical or High. gitleaks over the full history (46 commits): clean; no private IPs, internal names or real companies; `.env` never tracked; every published port on 127.0.0.1, 8089 unpublished. **Medium, both fixed:** M1, a JWT-shaped literal in a test would have failed the secret scan (built at runtime now); M2, service tokens lived 90 days, against T7.4's short expiry (7 days now; every `make up` renews them). **Low, fixed:** old tokens are deleted only when their `sub` is that user, and a failed delete stops the bootstrap (L1); the CIM package must be exactly one regular file, and its version is logged (L2, checksum pinning moved to R12); `.env` is written atomically with a 0600 temporary file under umask 077 (L3); the test index must match `pmx_[a-z0-9_-]+` (L4); T9.3/T9.6/T9.7 moved to R12 (L5). **Owner:** L6, three web-UI merge commits carry the owner's personal email (T10.2). Token path checked: container stdout → shell variable → `env_set.py` stdin → `.env`; never in process arguments, logs or the terminal |
 | Nov 2, 2026 (Phase 7c) | appsec subagent | Review of validation without a manifest. **High, both fixed:** H1, a faked constant `action` passed in mechanical mode, because source variety was read after the CIM layer had rewritten it, and EVALs reading two fields were skipped; variety now comes from a pre-CIM snapshot (also taken in parser updates), and an enumerated field (`action`) is judged however many fields it reads. H2, parser updates never paused for a timezone, so a guessed `TZ` passed for zone-less new samples; an unstated zone now fails the check, and builds and updates turn that into a profile-review pause. **Medium, all fixed:** a field already named `src` escaped the directions check (M1); the AI's timezone hint could become "confirmed by you" (only a zone the human sends now counts, and the review pause asks for it) (M2); the multi-line record count was the agent's own (code-owned start detector) (M3); an uploaded manifest was labelled "known answers" (labels fixture / uploaded / mechanical, and every value is also checked against its own line) (M4); the value check cost events × fields² with no deadline (M5); substring matches let `"1"` or a truncated IP count as present (whole-token matches) (M6). **Low, fixed:** every event scanned for a zone (L1); timeouts reported, not crashed (L2); zone suffix only after a time of day (L3); a version's mode from intake, and a manifest appearing later refused (L4); list values checked element by element (L5); one constant list shared with the guardrail (L6); New Year rollover for year-less timestamps (L7); `pmx_raw` reserved (L8, partly: a log field named `t` still collides with the Validator's join key, residual); approval wording no longer over-claims (L9). Also from the lab: the CIM mapper is told to leave a CIM field unmapped rather than fill it from an unrelated field |
