@@ -8,6 +8,7 @@ Repeatable scenario scripts. Each one runs a known scenario end to end against t
 - Each script:
   - uses only synthetic logs: the fixtures in `engine/parsemaxxing/generator/fixtures/`, or fresh ones from the generator;
   - reads its configuration from `.env` and, for the API scripts, `PARSEMAXXING_API` and `PARSEMAXXING_UI` (defaults: the local engine and UI);
+  - for the API scripts, sends the admin API token from `PARSEMAXXING_API_TOKEN` (create one under Settings > API tokens; the engine needs it since Phase 13) and stops with a message if it is unset;
   - never prints tokens or keys.
 - Scripts write only to the `pmx_` test index and `__test_<job>` apps, like the rest of Parsemaxxing; the engine removes each run's test add-on when the run ends. Nothing is promoted unless you approve it.
 - The top of each script states what it shows, its prerequisites (lab running, tokens set) and roughly how long it takes.

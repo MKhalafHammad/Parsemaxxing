@@ -18,8 +18,22 @@ UI = os.environ.get("PARSEMAXXING_UI", "http://localhost:3000")
 FX = Path(__file__).resolve().parents[1] / "engine/parsemaxxing/generator/fixtures"
 
 
+def api_token() -> str:
+    """The engine needs a token since Phase 13; never printed."""
+    token = os.environ.get("PARSEMAXXING_API_TOKEN", "")
+    if not token:
+        raise SystemExit(
+            "set PARSEMAXXING_API_TOKEN to an admin API token (UI: Settings > API tokens)"
+        )
+    return token
+
+
 def main() -> int:
-    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsemaxxing": "1"})
+    c = httpx.Client(
+        base_url=API,
+        timeout=60,
+        headers={"X-Parsemaxxing": "1", "Authorization": f"Bearer {api_token()}"},
+    )
     name = "acme_vpn_injected.json"
     files = {
         "file": (name, (FX / name).read_bytes()),

@@ -22,9 +22,23 @@ UPLOADS = [
 DONE = {"awaiting_approval", "stage_failed", "error", "done", "rejected"}
 
 
+def api_token() -> str:
+    """The engine needs a token since Phase 13; never printed."""
+    token = os.environ.get("PARSEMAXXING_API_TOKEN", "")
+    if not token:
+        raise SystemExit(
+            "set PARSEMAXXING_API_TOKEN to an admin API token (UI: Settings > API tokens)"
+        )
+    return token
+
+
 def main() -> int:
     # The API refuses state changes without this header (CSRF protection, threat T8.3).
-    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsemaxxing": "1"})
+    c = httpx.Client(
+        base_url=API,
+        timeout=60,
+        headers={"X-Parsemaxxing": "1", "Authorization": f"Bearer {api_token()}"},
+    )
     jobs = []
     for name, vendor, product, extra in UPLOADS:
         files = {
