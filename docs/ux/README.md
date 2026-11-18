@@ -13,13 +13,13 @@ Written in Phase 11 by the `ux` agent. These files are the spec the `frontend` a
 | [screens-settings.md](screens-settings.md) | Settings sub-pages | planned (Phases 13 to 21) |
 | [copy.md](copy.md) | Voice, vocabulary, status words, button labels, error pattern, confirmation dialogs, empty states | planned (Phase 15 for all screens) |
 | [accessibility.md](accessibility.md) | WCAG 2.2 AA requirements, axe and keyboard testing, light and dark tokens | planned (Phase 15) |
-| `reviews/<phase>.md` | Findings from reviewing built screens | none yet (first in Phase 15) |
+| `reviews/<phase>.md` | Findings from reviewing built screens | [13](reviews/13.md) |
 
 ## Status by screen and phase
 
 | Phase | Screens and flows | Spec status |
 | --- | --- | --- |
-| 13 | Sign in, MFA, recovery; API token back end; setup token | planned |
+| 13 | Sign in, MFA, recovery; setup token; forced MFA enrolment; Account security; API tokens, Users and Audit log screens (interim shell, ahead of Phase 15); `<AdminOnly>` | built (Phase 13), reviewed in [reviews/13.md](reviews/13.md): 3 must-fix items open |
 | 14 | Authentication and LDAP (LDAP part), F11 | planned |
 | 15 | App shell, Overview (without KPIs), first-run setup wizard (F1), Settings (General, Users, API tokens, Security health, Audit log, About, Data policies page), user menu pages, search, light and dark tokens; **v1 screens rehomed**: runs board, new run sheet, run workspace, profile review, approval report | planned |
 | 16 | LLM providers and agents, Budgets, kill switch | planned |
