@@ -91,3 +91,13 @@ def test_refuses_a_symlink_in_place_of_a_secret(repo: Path) -> None:
     r = run(repo)
     assert r.returncode == 1 and "not a regular file" in r.stderr
     assert not (repo / "elsewhere").exists()
+
+
+def test_leaves_other_files_in_secrets_alone(repo: Path) -> None:
+    (repo / "secrets").mkdir(mode=0o700)
+    recipients = repo / "secrets" / "backup_recipients.txt"
+    recipients.write_text("age1example\n")
+    recipients.chmod(0o644)
+    assert run(repo).returncode == 0
+    assert stat.S_IMODE(recipients.stat().st_mode) == 0o644
+    assert "backup_recipients.txt" not in (repo / "docker.log").read_text()

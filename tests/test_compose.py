@@ -81,7 +81,7 @@ def test_secrets_reach_only_the_services_that_need_them() -> None:
     def holders(secret: str) -> set[str]:
         return {n for n, s in SERVICES.items() if secret in s.get("secrets", [])}
 
-    assert holders("pmx_kek") == {"engine", "migrate"}  # never the web container (DK-6)
+    assert holders("pmx_kek") == {"engine"}  # never web, not migrate (DK-6, L2)
     assert holders("postgres_password") == {"postgres", "migrate"}
     assert holders("postgres_app_password") == {"engine", "migrate"}
     assert all(s["file"].startswith("./secrets/") for s in COMPOSE["secrets"].values())

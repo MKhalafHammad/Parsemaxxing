@@ -36,6 +36,7 @@ FROM_ENV = {  # nosec B105: variable names, not values
     "postgres_password": "POSTGRES_PASSWORD",
     "postgres_app_password": "POSTGRES_APP_PASSWORD",
 }
+NAMES = ("pmx_kek", "postgres_password", "postgres_app_password")
 PLACEHOLDER = re.compile(r"^(changeme|your-).*")
 
 
@@ -79,7 +80,7 @@ def main() -> int:
     DIR.mkdir(mode=0o700, exist_ok=True)
     os.chmod(DIR, 0o700)  # nosemgrep: insecure-file-permissions - owner-only directory
     env = env_values()
-    for name in ("pmx_kek", "postgres_password", "postgres_app_password"):
+    for name in NAMES:
         path = DIR / name
         if os.path.lexists(path):
             if path.is_symlink() or not path.is_file():
@@ -97,10 +98,9 @@ def main() -> int:
             create(path, kek() if name == "pmx_kek" else password())
             print(f"created secrets/{name} (generated)")
     wrong = sorted(
-        p.name
-        for p in DIR.iterdir()
-        if not p.name.startswith(".")
-        and (p.stat().st_uid != UID or p.stat().st_mode & 0o777 != 0o400)
+        n
+        for n in NAMES  # only its own files: backup_recipients.txt stays the owner's
+        if (DIR / n).stat().st_uid != UID or (DIR / n).stat().st_mode & 0o777 != 0o400
     )
     if not wrong:
         return 0

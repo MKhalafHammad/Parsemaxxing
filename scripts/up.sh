@@ -16,6 +16,20 @@ fi
 DOCKER=${DOCKER:-docker}
 compose() { $DOCKER compose "$@"; }
 
+# The UI has no login yet: the https proxy stays on loopback unless the admin opts in (M3).
+bind=${HTTPS_BIND-$(grep -sE '^HTTPS_BIND=' .env | tail -n1 | cut -d= -f2- | tr -d "\"' " || true)}
+case "$bind" in
+  "" | 127.0.0.1 | ::1 | "[::1]" | localhost) ;;
+  *)
+    if [ "${PMX_ALLOW_UNAUTHENTICATED_NETWORK:-}" != yes ]; then
+      echo "refused: HTTPS_BIND=$bind would expose the UI, which has no login yet (login lands in Phase 13)." >&2
+      echo "  Use 127.0.0.1, or set PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes to accept the risk." >&2
+      exit 1
+    fi
+    echo "warning: HTTPS_BIND=$bind exposes the UI without a login (PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes)" >&2
+    ;;
+esac
+
 health() { # service -> healthy|starting|unhealthy|exited|missing
   local id
   id=$(compose ps -q "$1" 2>/dev/null || true)
@@ -36,7 +50,14 @@ wait_healthy() { # service, seconds
   return 1
 }
 
-python3 scripts/init_env.py
+rc=0
+python3 scripts/init_env.py || rc=$?
+case $rc in
+  0) ;;
+  2) # the key may live in the vault (`parsemaxxing settings import-env`) instead of .env
+    echo "warning: LLM_API_KEY not set in .env: the engine will use the vault value; runs fail if the vault has none either" >&2 ;;
+  *) exit "$rc" ;;
+esac
 DOCKER="$DOCKER" python3 scripts/make_secrets.py
 DOCKER="$DOCKER" scripts/migrate_v1_volumes.sh # v1 (parsewright_*) volumes; no-op otherwise
 
