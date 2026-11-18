@@ -85,8 +85,8 @@ Members of the `docker` group have root-level access to the machine, so add only
 ## Step 3: Get the code and create `.env`
 
 ```bash
-git clone https://github.com/MKhalafHammad/Parsewright.git
-cd Parsewright
+git clone https://github.com/MKhalafHammad/Parsemaxxing.git
+cd Parsemaxxing
 make env
 ```
 
@@ -111,7 +111,7 @@ Nothing else needs a value: the passwords are generated, and the Splunk tokens a
 
 The CIM stage checks events against Splunk's Common Information Model data models, so Splunk needs this add-on. It is free, but Splunk licenses it, so it can't be included in this repository.
 
-1. Sign in to Splunkbase with a free account and download [Splunk Common Information Model (CIM)](https://splunkbase.splunk.com/app/1621). Parsewright's checks are pinned to version **8.7.0**.
+1. Sign in to Splunkbase with a free account and download [Splunk Common Information Model (CIM)](https://splunkbase.splunk.com/app/1621). Parsemaxxing's checks are pinned to version **8.7.0**.
 2. Copy the `.tgz` into `lab/`, keeping its name:
    ```bash
    cp ~/splunk-common-information-model-cim_870.tgz lab/
@@ -119,7 +119,7 @@ The CIM stage checks events against Splunk's Common Information Model data model
    ```
    If you downloaded it on another computer, copy it to the server first:
    ```bash
-   scp splunk-common-information-model-cim_870.tgz <user>@<server>:~/Parsewright/lab/
+   scp splunk-common-information-model-cim_870.tgz <user>@<server>:~/Parsemaxxing/lab/
    ```
 3. Check that `ls lab/*.tgz` shows exactly one file. It must be a regular file, not a link.
 
@@ -139,15 +139,15 @@ make up
 This takes about 15 minutes the first time, mostly Splunk's first start. Always use `make up` rather than `docker compose up`, because it also prepares Splunk:
 
 1. It starts Splunk and PostgreSQL and waits until they are healthy.
-2. It creates the `pw_test` index and three least-privilege service accounts (search, deploy, drift).
-3. It installs the CIM add-on, restarts Splunk, and points the add-on's index macros at `pw_*`.
+2. It creates the `pmx_test` index and three least-privilege service accounts (search, deploy, drift).
+3. It installs the CIM add-on, restarts Splunk, and points the add-on's index macros at `pmx_*`.
 4. It creates one fresh token per account and writes them to `.env` without printing them.
 5. It builds and starts the engine and the web UI.
 
 Success ends with:
 
 ```text
-Parsewright is up.
+Parsemaxxing is up.
   UI:          http://localhost:3000
   Splunk Web:  http://localhost:8000  (user admin, password SPLUNK_PASSWORD in .env)
 First run:     make first-run
@@ -157,7 +157,7 @@ First run:     make first-run
 
 ## Step 6: Start the first run
 
-Sample logs come with the repository, in `engine/parsewright/generator/fixtures/`. All of them are synthetic, with 300 events each:
+Sample logs come with the repository, in `engine/parsemaxxing/generator/fixtures/`. All of them are synthetic, with 300 events each:
 
 | File | Format |
 | --- | --- |
@@ -169,7 +169,7 @@ Sample logs come with the repository, in `engine/parsewright/generator/fixtures/
 Ignore the `.manifest.json` files: they are answer keys, and you don't need to upload them.
 
 1. Open http://localhost:3000 and click **New run**.
-2. Choose `engine/parsewright/generator/fixtures/acme_vpn.json` as the log file, then click **Start run**. Vendor, product and timezone are optional.
+2. Choose `engine/parsemaxxing/generator/fixtures/acme_vpn.json` as the log file, then click **Start run**. Vendor, product and timezone are optional.
 3. Check what the Profiler found on the profile review screen, then click **Confirm profile**.
 4. Watch the agents work. Each attempt is deployed to Splunk and checked. The run takes a few minutes and stops at **Awaiting approval**.
 
@@ -188,7 +188,7 @@ The run ends as `done`, and the add-on appears in the TA registry.
 Splunk Web is at http://localhost:8000 (user `admin`, password `SPLUNK_PASSWORD` from `.env`).
 
 > [!IMPORTANT]
-> **The web UI and Splunk Web open only on the machine running Parsewright, not from another machine.** This is a security choice: the UI has no login, so every port is bound to `127.0.0.1`, and the UI accepts only `localhost:3000` and `127.0.0.1:3000`. Use a browser on that same machine.
+> **The web UI and Splunk Web open only on the machine running Parsemaxxing, not from another machine.** This is a security choice: the UI has no login, so every port is bound to `127.0.0.1`, and the UI accepts only `localhost:3000` and `127.0.0.1:3000`. Use a browser on that same machine.
 
 ## Messages that are safe to ignore
 
@@ -198,6 +198,13 @@ Splunk Web is at http://localhost:8000 (user `admin`, password `SPLUNK_PASSWORD`
 | `unhealthy` in `docker compose ps` | While Splunk starts or restarts | `make up` keeps waiting, and it clears once Splunk is ready. It's a problem only if it lasts more than 15 minutes |
 | A failed attempt in a run | During a run | That is the fix loop: Splunk's evidence goes back to the agent, which tries again. Each stage gets up to 5 attempts |
 | `(already known)` after the job id | `make first-run` again | The same log already has a run, so the script follows that run instead of starting another |
+
+## Upgrading from Parsewright (v1.0.0)
+
+1. Stop the old stack, keeping its data: `docker compose -p parsewright down` (never add `-v`).
+2. In `.env`, rename every `PARSEWRIGHT_*` key to `PARSEMAXXING_*` and set `PARSEMAXXING_TEST_INDEX=pmx_test`. The engine refuses to start while an old key is set, and names the new one.
+3. Run `make up`. It backs up the old `parsewright_*` volumes into `backups/`, copies them into the new `parsemaxxing_*` volumes, and leaves the old ones in place. The database migration renames the app role to `parsemaxxing_app`.
+4. Add-ons you already built keep their `TA-parsewright-*` names and can still be updated and rolled back. New add-ons are named `TA-parsemaxxing-*`. The old `pw_test` index is left alone; remove it by hand when you no longer need it.
 
 ## Stop, restart or reset
 
@@ -210,13 +217,13 @@ docker compose down -v   # stop and DELETE all Splunk and PostgreSQL data
 
 To start from nothing, run `docker compose down -v`, delete the folder, and go back to [Step 3](#step-3-get-the-code-and-create-env). Save your CIM `.tgz` first.
 
-**Without Docker, against your own Splunk** (the lab setup): follow [docs/lab-findings.md](lab-findings.md), "Lab setup", set `SPLUNK_HOST`, `SPLUNK_PORT` and the three tokens in `.env`, then `make setup` and `.venv/bin/parsewright serve`.
+**Without Docker, against your own Splunk** (the lab setup): follow [docs/lab-findings.md](lab-findings.md), "Lab setup", set `SPLUNK_HOST`, `SPLUNK_PORT` and the three tokens in `.env`, then `make setup` and `.venv/bin/parsemaxxing serve`.
 
 ## Configuration
 
 Every setting lives in `.env`. [.env.example](../.env.example) documents each variable: what it is, whether it is required and where to get it. Docker Compose reads `.env` and refuses to start if a required value is missing.
 
-**Using a self-hosted Muse Spark Open (on-prem mode).** Run Muse Spark Open behind an OpenAI-compatible endpoint inside your network. Then point Parsewright at it:
+**Using a self-hosted Muse Spark Open (on-prem mode).** Run Muse Spark Open behind an OpenAI-compatible endpoint inside your network. Then point Parsemaxxing at it:
 
 ```bash
 LLM_BASE_URL=https://llm.example.com/v1
@@ -238,9 +245,9 @@ Nothing else changes, and sample logs never leave your network.
 
 **CLI**
 ```bash
-.venv/bin/parsewright run engine/parsewright/generator/fixtures/acme_vpn.json --vendor acme --product vpn
-.venv/bin/parsewright update TA-parsewright-acme-fw new_format.log
-.venv/bin/parsewright approve <job> --sha256 <hash> && .venv/bin/parsewright promote <job>
+.venv/bin/parsemaxxing run engine/parsemaxxing/generator/fixtures/acme_vpn.json --vendor acme --product vpn
+.venv/bin/parsemaxxing update TA-parsemaxxing-acme-fw new_format.log
+.venv/bin/parsemaxxing approve <job> --sha256 <hash> && .venv/bin/parsemaxxing promote <job>
 ```
 The CLI runs the same pipeline headless against the Splunk in `.env` and prints each attempt, check and the CIM score.
 
@@ -265,8 +272,8 @@ CI runs `make lint`, `make test` and `make security` on every pull request (not 
 
 ```
 .
-├── engine/                  Python backend (package: parsewright)
-│   ├── parsewright/
+├── engine/                  Python backend (package: parsemaxxing)
+│   ├── parsemaxxing/
 │   │   ├── api/             FastAPI routes, upload checks and the SSE stream (built)
 │   │   ├── orchestrator/    three-stage run loop, workers, approval and promotion (built)
 │   │   ├── agents/          LLM client, Profiler, Index-time, Extraction, CIM mapper (built)

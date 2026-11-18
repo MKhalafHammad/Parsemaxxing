@@ -1,23 +1,25 @@
-# Parsewright
+# Parsemaxxing
+
+**Start parsemaxxing your logs.** · [parsemaxxing.com](https://parsemaxxing.com)
 
 From raw sample logs to a tested, CIM-compliant Splunk add-on, verified by Splunk rather than by the model.
 
-[![CI](https://github.com/MKhalafHammad/Parsewright/actions/workflows/ci.yml/badge.svg)](https://github.com/MKhalafHammad/Parsewright/actions/workflows/ci.yml)
+[![CI](https://github.com/MKhalafHammad/Parsemaxxing/actions/workflows/ci.yml/badge.svg)](https://github.com/MKhalafHammad/Parsemaxxing/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 - **Demo video:** [watch the 3-minute demo on YouTube](https://www.youtube.com/watch?v=WsxSCXF_JRs)
 - **Setup:** [step-by-step guide](docs/setup.md)
 - Built for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026), Indie Developer Track, "Build for Your World" problem statement. All code was written during the event, from the first commit on Oct 27; only synthetic logs are used, and the demo shows only features built during the event. Progress per phase: [docs/build-plan.md](docs/build-plan.md).
 
-![Parsewright run workspace](docs/img/run-workspace.png)
+![Parsemaxxing run workspace](docs/img/run-workspace.png)
 
 ## The problem
 
 Every new log source in a SOC needs a Splunk parser: line breaking, timestamps, field extractions and CIM mapping. Writing and testing `props.conf` and `transforms.conf` by hand takes hours per source, and an index-time mistake corrupts data permanently.
 
-## What Parsewright does
+## What Parsemaxxing does
 
-You upload a sample log. A team of Muse Spark agents writes the Splunk add-on (TA) one stage at a time. Every attempt is deployed to a real Splunk and checked on every event by fixed searches. When a check fails, the agent gets the evidence and tries again. When everything passes, a human reviews raw vs parsed events and approves. The result is `TA-parsewright-<vendor>-<product>.tgz`.
+You upload a sample log. A team of Muse Spark agents writes the Splunk add-on (TA) one stage at a time. Every attempt is deployed to a real Splunk and checked on every event by fixed searches. When a check fails, the agent gets the evidence and tries again. When everything passes, a human reviews raw vs parsed events and approves. The result is `TA-parsemaxxing-<vendor>-<product>.tgz`.
 
 **Agents propose, code acts, Splunk judges:**
 
@@ -35,7 +37,7 @@ flowchart TB
         direction LR
         AGENT["<b>Stage agent</b> (Muse Spark)<br/>Index-time, then Extraction,<br/>then CIM mapper:<br/>proposes config"]
         GATE["<b>Guardrail gate</b><br/>code: allowlisted keys,<br/>regex and scope checks"]
-        DEPLOY["<b>Deploy + ingest</b><br/>code: test copy of the<br/>add-on, pw_test index"]
+        DEPLOY["<b>Deploy + ingest</b><br/>code: test copy of the<br/>add-on, pmx_test index"]
         VAL["<b>Validator</b><br/>Splunk: fixed SPL<br/>checks, no AI"]
         AGENT --> GATE
         GATE -- "allowed" --> DEPLOY --> VAL
@@ -44,7 +46,7 @@ flowchart TB
     end
 
     VAL -- "all three stages pass" --> APPROVE{{"Human: approve the exact package (SHA-256)"}}
-    APPROVE --> TA[/"TA-parsewright-#lt;vendor#gt;-#lt;product#gt;.tgz"/]
+    APPROVE --> TA[/"TA-parsemaxxing-#lt;vendor#gt;-#lt;product#gt;.tgz"/]
 ```
 
 Each stage gets at most 5 attempts within a token and time budget; if it runs out, the run stops with an honest report.
@@ -69,7 +71,7 @@ flowchart TB
         ORCH --> agents
         ORCH --> actions
     end
-    SPLUNK["<b>Splunk Enterprise</b> (standalone)<br/>TA-parsewright-* apps · pw_* test index<br/>REST :8089, scoped tokens"]
+    SPLUNK["<b>Splunk Enterprise</b> (standalone)<br/>TA-parsemaxxing-* apps · pmx_* test index<br/>REST :8089, scoped tokens"]
     LLM["Meta Model API<br/>or self-hosted Muse Spark Open"]
     UI <-->|"HTTP + server-sent events"| ORCH
     agents -->|"model calls"| LLM
@@ -86,7 +88,7 @@ More in [docs/design.md](docs/design.md): the [run states](docs/design.md#orches
 - **Guardrails** with an adversarial test suite: allowlisted keys and values, no index rerouting or data dropping, regex backtracking tests, logs treated as data, never instructions.
 - **Parallel jobs** on a PostgreSQL queue, with budgets and a kill switch.
 - **Web UI:** a live view of which agent is acting, every attempt and Splunk's verdict, raw vs parsed, and approval bound to the package's SHA-256.
-- **Parser updates:** when a log format changes, Parsewright finds what broke with no AI call, patches only that, proves the old format still parses, and keeps every version for rollback.
+- **Parser updates:** when a log format changes, Parsemaxxing finds what broke with no AI call, patches only that, proves the old format still parses, and keeps every version for rollback.
 - **One-command setup** (`make up`) that starts and prepares its own Splunk.
 
 **Future enhancements:** drift monitoring with automatic update jobs, and routing for shared syslog feeds. The full list is in [docs/features.md](docs/features.md).
@@ -107,7 +109,7 @@ The model is set only through environment variables (`LLM_BASE_URL`, `LLM_MODEL`
 ## Security
 
 - **Do not upload real production logs to a hosted model.** Use the synthetic generator, mask your data, or use on-prem mode.
-- Agents cannot deploy; test deploys use separate names and `pw_*` indexes only; every port is bound to `127.0.0.1`.
+- Agents cannot deploy; test deploys use separate names and `pmx_*` indexes only; every port is bound to `127.0.0.1`.
 - Report vulnerabilities privately: [SECURITY.md](SECURITY.md). Threat model: [docs/threat-model.md](docs/threat-model.md).
 
 ## Limitations
@@ -129,9 +131,13 @@ The model is set only through environment variables (`LLM_BASE_URL`, `LLM_MODEL`
 | [docs/build-log.md](docs/build-log.md) | What was built in each phase, with test results |
 | [demo/](demo/README.md) | Repeatable scripts for every demo moment |
 
+## History
+
+First released as Parsewright: [v1.0.0](https://github.com/MKhalafHammad/Parsemaxxing/tree/v1.0.0).
+
 ## Trademarks
 
-Splunk, Splunk Enterprise and Splunkbase are trademarks or registered trademarks of Splunk LLC in the United States and other countries. Meta is a trademark of Meta Platforms, Inc. Parsewright is an independent project; it is not affiliated with, sponsored or endorsed by Splunk or Cisco. No Splunk software is included in this repository, only the CIM field names and allowed values the Validator checks against (`engine/parsewright/cim_spec/`), as published in Splunk's CIM documentation: `make up` pulls the official `splunk/splunk` image, whose license you accept in `.env`, and you download the CIM add-on yourself.
+Splunk, Splunk Enterprise and Splunkbase are trademarks or registered trademarks of Splunk LLC in the United States and other countries. Meta is a trademark of Meta Platforms, Inc. Parsemaxxing is an independent project; it is not affiliated with, sponsored or endorsed by Splunk or Cisco. No Splunk software is included in this repository, only the CIM field names and allowed values the Validator checks against (`engine/parsemaxxing/cim_spec/`), as published in Splunk's CIM documentation: `make up` pulls the official `splunk/splunk` image, whose license you accept in `.env`, and you download the CIM add-on yourself.
 
 ## License
 
