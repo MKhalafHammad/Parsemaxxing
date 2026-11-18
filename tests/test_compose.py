@@ -97,10 +97,33 @@ def test_secrets_reach_only_the_services_that_need_them() -> None:
     assert holders("pmx_kek") == {"engine"}  # never web, not migrate (DK-6, L2)
     assert holders("postgres_password") == {"postgres", "migrate"}
     assert holders("postgres_app_password") == {"engine", "migrate"}
+    assert holders("pmx_proxy_hop") == {"web", "https"}
     assert all(s["file"].startswith("./secrets/") for s in COMPOSE["secrets"].values())
     assert "/secrets/" in (ROOT / ".gitignore").read_text().splitlines()
     for key in SERVICES["web"]["environment"]:
         assert "PASSWORD" not in key and "TOKEN" not in key and "KEY" not in key, key
+
+
+def test_proxy_hop_header_comes_from_the_secret_and_replaces_the_clients() -> None:
+    """Web passes X-Forwarded-For on only when X-Pmx-Hop matches (M1): Caddy must set it from
+    the secret, replacing whatever the client sent, and nothing else may hold the value."""
+    caddyfile = (ROOT / "scripts" / "Caddyfile").read_text()
+    assert re.search(
+        r"reverse_proxy web:3000 \{\s*header_up X-Pmx-Hop \{file\./run/secrets/pmx_proxy_hop\}\s*\}",
+        caddyfile,
+    )
+    assert "header_up +X-Pmx-Hop" not in caddyfile  # "+" would append to a forged value
+    env = SERVICES["web"]["environment"]
+    assert env["PMX_PROXY_HOP_FILE"] == "/run/secrets/pmx_proxy_hop"
+
+
+def test_engine_and_web_allow_the_same_origins() -> None:
+    web, engine = (SERVICES[n]["environment"] for n in ("web", "engine"))
+    assert engine["WEB_ORIGINS"] == web["WEB_ORIGINS"]
+    assert "WEB_ORIGIN" not in engine  # one source of truth
+    origins = web["WEB_ORIGINS"].split(",")
+    assert "http://localhost:${WEB_PORT:-3000}" in origins
+    assert "https://${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443}" in origins
 
 
 def test_every_image_is_pinned_by_digest() -> None:

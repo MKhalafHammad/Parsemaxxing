@@ -3,6 +3,7 @@ docker (the real one would chown the files to uid 10001)."""
 
 import base64
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -12,7 +13,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "make_secrets.py"
-NAMES = ("pmx_kek", "postgres_password", "postgres_app_password")
+NAMES = ("pmx_kek", "postgres_password", "postgres_app_password", "pmx_proxy_hop")
 
 
 @pytest.fixture
@@ -54,12 +55,24 @@ def test_creates_every_secret_private_and_quiet(repo: Path) -> None:
         assert stat.S_IMODE((repo / "secrets" / name).stat().st_mode) == 0o400
         value = read(repo, name)
         assert "\n" not in value and value not in r.stdout + r.stderr
-    assert len(base64.b64decode(read(repo, "pmx_kek"), validate=True)) == 32
+    for name in ("pmx_kek", "pmx_proxy_hop"):
+        assert len(base64.b64decode(read(repo, name), validate=True)) == 32
+    assert read(repo, "pmx_kek") != read(repo, "pmx_proxy_hop")
     assert read(repo, "postgres_password") != read(repo, "postgres_app_password")
     assert not [p for p in (repo / "secrets").iterdir() if p.name.startswith(".")]
     # Ownership is handed to the containers' uid, by argument list, without any secret value.
     log = (repo / "docker.log").read_text()
     assert "10001:10001" in log and "--network\nnone" in log
+    # The proxy-hop file goes to web's uid 1000 (Caddy reads it as root), in its own call; a
+    # test user that is uid 1000 already owns it, so no call is needed.
+    calls = {
+        re.search(r"^\d+:\d+$", c, re.MULTILINE)[0]: c
+        for c in log.split("run\n--rm\n")[1:]
+    }
+    assert "/s/pmx_kek" in calls["10001:10001"]
+    assert "/s/pmx_proxy_hop" not in calls["10001:10001"]
+    if os.getuid() != 1000:
+        assert calls["1000:1000"].endswith("/s/pmx_proxy_hop\n")
     assert all(read(repo, n) not in log for n in NAMES)
 
 

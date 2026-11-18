@@ -182,7 +182,8 @@ services:
       PARSEMAXXING_TEST_INDEX: ${PARSEMAXXING_TEST_INDEX:-pmx_test}
       PARSEMAXXING_RUN_TOKEN_CEILING: ${PARSEMAXXING_RUN_TOKEN_CEILING:-300000}
       ALLOWED_HOSTS: localhost,127.0.0.1,engine
-      WEB_ORIGIN: http://localhost:${WEB_PORT:-3000}
+      # The browser origins allowed to send the session cookie; the same list as web's (anchor).
+      WEB_ORIGINS: &web-origins http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000},https://${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443},https://${PMX_PUBLIC_HOST:-localhost}
       SPLUNK_HOST: splunk
       SPLUNK_PORT: "8089"
       # Only the web container's X-Forwarded-For names the client (per-IP lockout); the https
@@ -211,7 +212,7 @@ services:
         limits: { cpus: "2", memory: 2g, pids: 512 }
     restart: unless-stopped
 
-  # No secret, no KEK, no database access: it reaches only the engine (app network).
+  # No KEK, no database access, only the proxy-hop secret: it reaches only the engine (app network).
   web:
     image: parsemaxxing-web:local
     build:
@@ -224,7 +225,10 @@ services:
       # The browser reaches the UI only by these names (DNS-rebinding guard, threat T8.5); the
       # last two are the https profile's public name, with its port and without (port 443).
       ALLOWED_HOSTS: localhost:${WEB_PORT:-3000},127.0.0.1:${WEB_PORT:-3000},${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443},${PMX_PUBLIC_HOST:-localhost}
-      WEB_ORIGINS: http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000},https://${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443},https://${PMX_PUBLIC_HOST:-localhost}
+      WEB_ORIGINS: *web-origins
+      # The https proxy sends this value as X-Pmx-Hop; only then is X-Forwarded-For passed on.
+      PMX_PROXY_HOP_FILE: /run/secrets/pmx_proxy_hop
+    secrets: [pmx_proxy_hop]
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
     networks:
@@ -267,6 +271,7 @@ services:
     configs:
       - source: caddyfile
         target: /etc/caddy/Caddyfile
+    secrets: [pmx_proxy_hop] # owned by web's uid 1000; read here as root (DAC_READ_SEARCH)
     ports:
       - "${HTTPS_BIND:-127.0.0.1}:${HTTPS_PORT:-8443}:8443"
     networks: [edge]
@@ -299,6 +304,8 @@ secrets:
     file: ./secrets/postgres_password
   postgres_app_password:
     file: ./secrets/postgres_app_password
+  pmx_proxy_hop:
+    file: ./secrets/pmx_proxy_hop
 
 networks:
   edge: {}
