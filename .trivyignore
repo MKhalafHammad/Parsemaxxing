@@ -1,0 +1,10 @@
+# Trivy findings accepted after review (scripts/image_check.sh scan, CI job "images").
+# Policy: the scan fails on HIGH and CRITICAL findings that have a fix. Before adding a line
+# here, try a base image refresh (scripts/refresh_digests.py) or a dependency update first.
+# An entry needs: the id, the package, why it does not apply or cannot be fixed yet, who
+# reviewed it, and a review date at most 30 days ahead; record it as a residual risk in
+# docs/threat-model.md. Expired entries are removed, not renewed silently.
+#
+# Format (one id per line, comment above it):
+# # <package>: <reason>. Reviewed by <role> on <date>, review again by <date>.
+# CVE-YYYY-NNNNN

@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 # A new push to the same PR cancels the run still in progress.
 concurrency:
@@ -18,7 +20,7 @@ jobs:
     # no data, accepts only this job's connections and is destroyed with the runner.
     services:
       postgres:
-        image: postgres:17.11-alpine
+        image: postgres:17.11-alpine@sha256:e5d2edd28b1f8d40a0a6c0c9cdc545b19b56a0d5d88f94bc11a97d970d4700d0
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
@@ -57,3 +59,28 @@ jobs:
       - run: make lint
       - run: make test
       - run: make security
+
+  # Both images built as `make up` builds them, then a CycloneDX SBOM per image (kept as an
+  # artifact) and a Trivy scan that fails on fixable HIGH or CRITICAL findings (.trivyignore).
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the engine and web images
+        run: docker compose --env-file .env.example build engine web
+      - run: scripts/image_check.sh sbom
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: sbom/*.cdx.json
+          retention-days: 30
+      - run: scripts/image_check.sh scan
+
+  # Encrypted backup and restore round trip against a real PostgreSQL (scripts/restore_test.sh).
+  restore-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Bootstrap .env and the Docker secrets (throwaway values)
+        run: make secrets
+      - run: scripts/restore_test.sh
