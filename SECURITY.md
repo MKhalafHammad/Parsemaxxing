@@ -12,12 +12,12 @@ You can expect an acknowledgement within 5 working days and an update on the fix
 
 ## Supported versions
 
-Parsemaxxing is pre-1.0 and built during a hackathon. Only the latest commit on the `main` branch is supported; fixes are not backported.
+Parsemaxxing v2 is under development and has no 2.0.0 release yet. Only the latest commit on the `main` branch is supported; fixes are not backported to v1.0.0 (released as Parsewright) or to pre-release tags.
 
 | Version | Supported |
 | --- | --- |
 | `main` (latest) | Yes |
-| Anything older | No |
+| v1.0.0 (Parsewright) and older | No |
 
 ## Never post secrets or real logs
 
@@ -30,6 +30,14 @@ Parsemaxxing is pre-1.0 and built during a hackathon. Only the latest commit on 
 - `.env` is git-ignored; `.env.example` holds placeholders only.
 - gitleaks runs on every commit (pre-commit) and over the full git history in CI.
 - Runtime guardrails are described in [docs/design.md](docs/design.md), section "Guardrails and security", and the threat model in [docs/threat-model.md](docs/threat-model.md).
+
+## Real log retention
+
+Planned (Phase 21, design 7.19); today the platform deletes nothing on a schedule, so use synthetic logs or remove real samples yourself.
+
+- **Deleted:** real samples (uploaded or pulled from Splunk), their copies in the sandbox's `pmx_` test index, raw lines in evidence, approval reports, drift bundles and console transcripts, and masking maps. They go 30 days after the job ends by default; an admin can shorten this per client down to 0 days. No setting allows more than 30 days.
+- **Kept:** job metadata, ledger events, check results and numbers, add-on versions and packages, fix memory (configs and check messages only), and each version's masked regression set.
+- **Backups:** do not keep backups longer than 30 days, for the same reason.
 
 ## Licence
 

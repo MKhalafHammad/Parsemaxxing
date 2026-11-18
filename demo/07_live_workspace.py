@@ -1,4 +1,4 @@
-"""RECORD THIS: the agent-centred run workspace. Run through demo/07_live_workspace.sh.
+"""Scenario: the agent-centred run workspace. Run through demo/07_live_workspace.sh.
 
 Uploads the no-offset VPN fixture (Tokyo time, no timezone in the timestamps) with profile review
 on, prints the board and the job's workspace, then follows the job until it awaits approval.

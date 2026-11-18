@@ -111,3 +111,23 @@ def test_005_is_safe_to_run_twice(fresh_db):
         conn.execute(sql)
         assert _roles(conn) == {NEW}
         _app_role_works(conn)
+
+
+def test_leftover_old_role_that_cannot_be_dropped_loses_its_login(fresh_db, pg_dsn):
+    """Both roles exist and the old one is still granted elsewhere: 005 disables its login."""
+    admin = urlunsplit(urlsplit(pg_dsn)._replace(path="/postgres"))
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(f"CREATE ROLE {OLD} LOGIN PASSWORD 'synthetic-test-only'")
+        conn.execute(f"GRANT CONNECT ON DATABASE postgres TO {OLD}")
+    try:
+        with db.connect(fresh_db) as conn:
+            db.migrate(conn)
+            row = conn.execute(
+                "SELECT rolcanlogin, rolpassword IS NULL AS nopw FROM pg_authid WHERE rolname = %s",
+                (OLD,),
+            ).fetchone()
+            assert row == {"rolcanlogin": False, "nopw": True}
+    finally:
+        with psycopg.connect(admin, autocommit=True) as conn:
+            conn.execute(f"REVOKE CONNECT ON DATABASE postgres FROM {OLD}")
+            conn.execute(f"DROP ROLE IF EXISTS {OLD}")

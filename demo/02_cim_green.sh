@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RECORD THIS: the first green CIM check (Phase 3).
+# Scenario: the first green CIM check (Phase 3).
 #
 # Shows: one log file goes through all three stages (index-time, extraction, CIM mapping),
 # each checked by Splunk, and ends with the holdout line ("learned from 200 lines, passed on

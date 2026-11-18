@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RECORD THIS: parallel jobs (Phase 5).
+# Scenario: parallel jobs (Phase 5).
 #
 # Shows: four log files uploaded at once through the API; four workers take them in parallel;
 # three run straight through while the fourth (no auto-approve) pauses for profile review and

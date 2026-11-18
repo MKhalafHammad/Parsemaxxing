@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RECORD THIS: the agent-centred run workspace (UI redesign, before Phase 8).
+# Scenario: the agent-centred run workspace (UI redesign, before Phase 8).
 #
 # Shows: the runs board with "Needs you" pinned, the profile review with coverage bars and
 # "you changed this" markers, then the live workspace: the Now banner naming the agent at work,

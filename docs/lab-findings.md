@@ -328,3 +328,295 @@ The design says to "write the new TA version to `/opt/splunk/etc/apps/TA-*/defau
 - **Decision:**
   - Updates are promoted in place with `update=true`, only over a TA the registry lists, at the version the registry expects.
   - Overrides are found by comparing the effective settings (app context) with what the production TA's own `default/` sets. For a key the TA does not set, the comparison is against Splunk's documented `props.conf` defaults, kept in code.
+
+# Lab findings v2 (Phase 11)
+
+> Questions Q12 to Q24 from the v2 plan (design sections 7.1, 7.2, 7.16 to 7.19). Q15 is merged into Q14. Every lab question runs on the oldest and the newest supported version (10.2 and 10.6, D10); a result that differs between them is recorded per version. Same rules as above: **Expectation** lines are unverified hypotheses written before testing, only **Evidence** and **Result** lines count, and no token, hostname, IP or client name is pasted here (the v2 probes print hosts and clients as `h-<hash>` labels, but read the output once before pasting).
+
+## Summary (v2)
+
+| Q | Question | Blocks | Answered by | Status | Decision |
+| --- | --- | --- | --- | --- | --- |
+| Q12 | Can `apps/local` install a package that is not on the host's disk; narrowest deploy capabilities? | Phase 18 standalone and HF adapters | `probe_remote_install` | Open: awaiting owner lab run | |
+| Q13 | SHC: `apps/deploy` with a token, `deployer_push_mode`, reading a member's effective props | Phase 18 SHC adapter, relay `apply-shc` | `probe_delivery shc-calls`, `shc-push`; `probe_readback` | Open: awaiting owner lab run | |
+| Q14 | DS for HFs: map and reload over REST or relay; tell UF from HF clients; HF-DS restart need | Phase 18 DS adapter, relay `ds-map` | `probe_topology`, `probe_delivery ds-map`, `probe_remote_install` | Open: awaiting owner lab run | |
+| Q15 | (Merged into Q14) | | | Merged | |
+| Q16 | Smallest `parsemaxxing_read` role; `_internal` restricted to parser components | Phases 12 (role script), 17 (discovery), drift | `probe_read_role` | Open: awaiting owner lab run | |
+| Q17 | What can be read back per tier to prove effective settings | Phase 18 `verify` | `probe_readback` | Open: awaiting owner lab run | |
+| Q18 | SSH client library for the relay: `asyncssh` or `paramiko` | Phase 18 relay client | Desk research | Proposed, owner to confirm | `asyncssh` |
+| Q19 | Embedding model and chart library, licences allow commercial use | Knowledge base, analytics UI | Desk research | Proposed, owner to confirm | `bge-small-en-v1.5` (ONNX); Recharts |
+| Q20 | W3C/IIS and CSV: `DELIMS`/`FIELDS` vs `INDEXED_EXTRACTIONS`; header lines out of CIM | Formats phase, gate keys | `probe_formats` | Open: awaiting owner lab run | |
+| Q21 | `datamodel/model` vs the package JSON; exact CIM version with the read account | CIM library local-changes check | `probe_cim` | Open: awaiting owner lab run | |
+| Q22 | CIM 6.3.0 and newest on 10.2 and 10.6; normalizer reads 6.x and 8.x the same way | CIM library, `environments/versions.py` | `probe_cim` + normalizer tests | Open: awaiting owner lab run | |
+| Q23 | Overlay precedence per tier, and how to read the winner back | Overlays (7.18) | `probe_overlay`, `probe_readback` | Open: awaiting owner lab run | |
+| Q24 | Remove one job's events from the `pmx_` index without `delete` | Retention purge (7.19) | `probe_retention` | Open: awaiting owner lab run | |
+
+## Owner decisions already settled (v2)
+
+Recorded here so the lab work does not reopen them (master prompt sections 4, 5 and 11):
+
+- **Approvals:** any admin can approve any deployment, including one they requested; the four-eyes setting exists per environment and is off by default (D6).
+- **Discovery is manual only:** an admin starts it; nothing scans on a schedule.
+- **Viewers see raw samples**, and every view is audited.
+- **Sources:** `attack_data` and `security_content` are not used; ECS and OCSF are not used (CIM's own field descriptions give field meaning); reference add-ons and fix memory are in (7.12 tiers 7 and 8).
+- **Supported Splunk Enterprise:** 10.2 and later (D10). CIM minimum: `Splunk_SA_CIM` 6.3.0 or later on 10.2 to 10.6, 8.5.0 or later on 10.7 and later (Q22 confirms it in the lab, it does not reopen it).
+- **Parsing on heavy forwarders, never indexers** (D11); no cluster manager or indexer adapter.
+- **Name and prefixes:** Parsemaxxing, internal prefix `pmx`, add-on prefix `TA-parsemaxxing-`; add-ons built before the rename keep `TA-parsewright-` and are never renamed in place.
+- **Licence:** PolyForm Shield 1.0.0 for v2; v1.0.0 and earlier stay MIT. Generated add-ons carry no Parsemaxxing licence.
+- **Real log retention:** deleted 30 days after job end by default, 0 to 30 days per client, never more; masked regression sets are kept with each version (7.19).
+
+## Lab setup v2 (OWNER ACTION, once per version)
+
+Build the lab twice, once on 10.2.x and once on 10.6.x (the Proxmox lab can host both):
+
+1. **Nodes:** a standalone sandbox; a search head cluster of 3 members with a deployer; two heavy forwarders, one of them also the deployment server for one universal forwarder (the HF-DS); a separate deployment server that manages the HFs (the other HF is its client); indexers, clustered or not (read-only for Parsemaxxing).
+2. **Indexes:** the shared `pmx_test` index on the sandbox and on the indexers (so HF tests can be searched), plus one customer-style index such as `cus_acme_web` with a few synthetic events, and a second one such as `cus_globex_web` that the read role must not see.
+3. **Packages folder:** on the sandbox, `PARSEMAXXING_PACKAGES_DIR` as in Q6 (owned by the probe user, mode 755, readable by `splunk`). The write probes that install from a host path use it.
+4. **Roles and tokens:** a candidate `parsemaxxing_read` role (capability `search`, indexes `cus_acme_*` and `_internal`, no inheritance) and a `parsemaxxing_deploy` role per node, starting from Q9's final role and trimmed by Q12. One token each.
+5. **Certificates:** give each node a certificate from a lab CA and keep the CA bundle for `--ca-file`. Use `--insecure-skip-tls-verify` only for a node that still has Splunk's default certificate, and record that in the evidence.
+
+## Running the v2 probes (OWNER ACTION)
+
+The probes read tokens only from the environment, never from arguments (other users can read command lines). Type them without echo, so they stay out of the shell history:
+
+```bash
+read -rs PMX_LAB_READ_TOKEN && export PMX_LAB_READ_TOKEN
+read -rs PMX_LAB_DEPLOY_TOKEN && export PMX_LAB_DEPLOY_TOKEN
+export PMX_LAB_CA_FILE=/path/to/lab-ca.pem      # or --ca-file per run
+.venv/bin/python -m parsemaxxing.tools.probes.probe_topology --host <node>
+```
+
+- Every probe verifies TLS by default, has a per-call timeout (`--timeout`, default 30 s) and caps search rows at 200.
+- Read-only probes: `probe_topology`, `probe_read_role`, `probe_readback`, `probe_cim`, `probe_retention` (without `--roll`), `probe_delivery shc-calls`. They use only `PMX_LAB_READ_TOKEN`.
+- Write probes refuse to run without `--lab-write` (a statement that the node is a lab node, never production), install only throwaway apps whose names end in `__test_probe`, ingest only into a `pmx_` index, and uninstall what they installed. They are `probe_remote_install`, `probe_delivery shc-push|ds-map|ds-unmap`, `probe_overlay`, `probe_formats` and `probe_retention --roll`.
+- No probe runs in CI. The unit tests (`engine/tests/tools/test_lab_probes.py`) cover the pure helpers only.
+- Paste the output under the right version's **Evidence**. Hosts, members and clients print as `h-<hash>`; error messages are scrubbed of IPs, host names and token-like strings, but read them once before pasting.
+
+## Q12. Remote standalone install
+
+- **Question:** can `apps/local` install a package that is not on the Splunk host's disk (from a URL, or an upload), or must the relay stage it first? Which capabilities does it need, and can that be narrower than `admin_all_objects` (R8)?
+- **Why it matters:** blocks the Phase 18 adapters for a standalone search head, a non-clustered search head and a heavy forwarder installed directly (including the HF-DS). v1 installs from a shared folder on the same host (Q6), which a remote production node does not have. If REST cannot fetch, every direct install needs the relay.
+- **Lab setup:** the standalone sandbox and one HF; this machine reachable from them on one TCP port; the deploy role from Q9.
+- **Probe steps:** `probe_remote_install --host <node> --lab-write --serve-bind <this machine's lab address> --serve-port 8765`
+  1. Builds a props-only add-on `TA-parsemaxxing-acme-remote__test_probe` and serves only that file over HTTP for the probe's duration.
+  2. `POST /services/apps/local` with `name=<url>`, `filename=true`, `update=true`; then `POST /services/apps/appinstall` with the same URL.
+  3. After each: was the file fetched (served count), does `GET /services/apps/local/<app>` show it and its version, and does `GET /services/messages` hold a restart message.
+  4. On a node with the deployment server role (the HF-DS): `deployment/server/clients` count before and after (see Q14).
+  5. Repeat with the deploy role trimmed one capability at a time (`admin_all_objects`, `install_apps`, `edit_local_apps`, `rest_apps_management`) and record the smallest set that still installs.
+  6. Manual: try an upload through Splunk Web's app install page with the deploy user, to see whether any upload path exists for a token (Splunk Web uses a session, so it is not a REST option).
+- **What decides what:** URL install works with a token → the adapter installs over REST from a short-lived, single-file, hash-named URL served by Parsemaxxing (only to that node, TLS if Splunk requires it), and the relay is not needed for direct installs. Only `http` refused but `https` accepted → serve over TLS. Nothing fetches → direct installs go through the relay (`stage`, then a local `apps/local` install from the staged path). The capability set found becomes the generated `parsemaxxing_deploy` role; if `admin_all_objects` stays required, it stays a recorded residual risk.
+- **Expectation:** `apps/local` accepts a URL with `filename=true` on some versions; it may require HTTPS or a Splunkbase-style source.
+- **Probe script:** `probe_remote_install`.
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**
+
+## Q13. Search head cluster deployer push
+
+- **Question:** does the `apps/deploy` endpoint on the deployer work on 10.2 and 10.6 with a token? How does `deployer_push_mode` behave for an add-on with no `local/`? How is a member's effective props read for the `local/` override check?
+- **Why it matters:** blocks the Phase 18 SHC adapter. Design 7.2 says the deployer push goes through the relay (`apply-shc`, CLI `splunk apply shcluster-bundle`) unless the lab proves the endpoint on the target version. The impact analysis reads `local/` overrides from a member.
+- **Lab setup:** the 3-member SHC and deployer; a probe app placed by hand in the deployer's `etc/shcluster/apps/` (no `local/`); `PMX_LAB_DEPLOY_TOKEN` for a deploy user on the deployer.
+- **Probe steps:**
+  1. Run the CLI push once by hand on the deployer: `splunk apply shcluster-bundle -target https://<member>:8089` (log in with `splunk login`, never `-auth`).
+  2. `probe_delivery --host <deployer> shc-calls` (read token): lists the `splunkd_access` calls the CLI made (`*/apps/deploy*`, `*/shcluster/*`), with method and status, so the probe repeats exactly what the CLI does.
+  3. `probe_delivery --host <deployer> --lab-write shc-push --member https://<member>:8089`: `POST /services/apps/deploy` with `target`, `action=all`, `advertising=true` and a token; then `GET /services/shcluster/status`. Adjust the parameters to what step 2 showed.
+  4. `deployer_push_mode`: set it in the probe app's `app.conf` `[shclustering]` stanza to `full`, `merge_to_default` (the default), `local_only` and `default_only` in turn, push, and on a member run `probe_readback --host <member> --app <app> --sourcetype <st>` plus, by hand, `splunk btool props list <st> --debug` to see which directory each setting landed in.
+  5. Override check: on one member add a `local/` value by hand (Splunk Web on that member), then run `probe_readback` on that member and compare the app-context and global answers and the `eai:acl` app.
+  6. Relay CLI path (by hand, recorded for the command library): `splunk login` on stdin, `apply shcluster-bundle`, `splunk logout`; also try the local REST call `https://127.0.0.1:8089/services/apps/deploy` with the token on the deployer (design 7.2 Splunk login order (a) vs (b)).
+- **What decides what:** endpoint works with a token on both versions → it may be used, behind a version check that names the versions recorded here; otherwise the relay runs the CLI. Local REST with the token works on the deployer → relay order (a), else (b) `splunk login` on stdin. The `deployer_push_mode` result fixes what `app.conf` the TA builder writes for SHC targets (expected: nothing, since the package has no `local/`). The member read-back that shows `local/` overrides becomes the impact-analysis read.
+- **Expectation:** `apps/deploy` exists but is undocumented; with `merge_to_default` and no `local/` the member receives `default/` unchanged; `configs/conf-props` on a member returns merged values with no default/local origin, so the override check compares the member's effective values with the package's `default/`, as Q11 does on a standalone.
+- **Probe script:** `probe_delivery` (`shc-calls`, `shc-push`), `probe_readback`.
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**
+
+## Q14. Deployment server for heavy forwarders (Q15 merged here)
+
+- **Question:** can an app be mapped to a server class of HFs and the DS reloaded over REST, or only through the relay? How does the planner read each server class's clients so it refuses a class with universal forwarder clients? Does an HF that is also the UF deployment server (HF-DS) need a restart or reload after an app install?
+- **Why it matters:** blocks the Phase 18 DS adapter and the relay's `ds-map` and `ds-reload` verbs, and the tier rule's safety check (never a server class with UF clients, design 7.2).
+- **Lab setup:** the DS for HFs with one HF as its client; the HF-DS serving one UF; a probe app placed by hand in the DS's `etc/deployment-apps/` (the relay's `stage` step does this in managed mode).
+- **Probe steps:**
+  1. `probe_topology --host <DS for HFs>` and `--host <HF-DS>`: `GET deployment/server/clients`, `deployment/server/serverclasses`, `deployment/server/applications`. It prints which client fields exist that could tell a UF from an HF (`package`, `build`, `utsname`, `splunkVersion` and others) with their product values, client names hashed. Record which field says "universal forwarder" on each version.
+  2. `probe_delivery --host <DS for HFs> --lab-write ds-map --client <HF client name> --app <probe app>`: refuses unless that one client is proven not to be a UF, then `POST deployment/server/serverclasses` (`name=pmx_probe_hf__test_probe`, `whitelist.0=<client>`), `POST deployment/server/applications/<app>` (`serverclass=…`), `POST deployment/server/config/_reload`.
+  3. On the HF: `probe_readback --host <HF> --app <probe app> --sourcetype <st>` once the client has phoned home; record the time it took and whether the app needed a restart (`restartSplunkd` in the server class app settings, and `GET messages`).
+  4. `probe_delivery ... ds-unmap` to remove the probe server class. Then repeat by hand with the CLI (`splunk reload deploy-server -class pmx_probe_hf__test_probe`) for the command library.
+  5. HF-DS: `probe_remote_install --host <HF-DS> --lab-write ...` (Q12) installs into the HF-DS's own apps; it reports restart messages and whether the UF client count changed; then check by hand that the UF did not receive the app (`splunk list deploy-clients` and the UF's `etc/apps`).
+- **What decides what:** REST map and reload work with a token → the DS adapter uses REST; otherwise the relay's `ds-map`/`ds-reload`. The UF-identifying client field becomes the planner's check; if no field identifies a UF reliably, the planner refuses any server class whose clients it cannot classify and the admin confirms each HF client by hand. The HF-DS result decides whether the plan flags a restart for it.
+- **Expectation:** the server class and application endpoints accept writes with `edit_deployment_server` (or `admin_all_objects`); client entries carry a field naming the package type on newer versions; an HF-DS needs no restart for a props-only app.
+- **Probe script:** `probe_topology`, `probe_delivery` (`ds-map`, `ds-unmap`), `probe_remote_install`, `probe_readback`.
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**
+
+## Q15. (Merged into Q14)
+
+The deployment server for HFs is covered by Q14.
+
+## Q16. Read account
+
+- **Question:** what is the smallest role that can run discovery searches, read `_internal` parser warnings for given sourcetypes and read `configs/conf-props`? Can a search filter restrict `_internal` to the parser components?
+- **Why it matters:** blocks the generated role script (`parsemaxxing_read`) in Phase 12, discovery (Phase 17), drift collection and post-deploy verification.
+- **Lab setup:** the candidate `parsemaxxing_read` role (capability `search`, indexes `cus_acme_*` and `_internal`, no inheritance), a token for it, a sourcetype with events in `cus_acme_web`, and `cus_globex_web` outside its allowlist.
+- **Probe steps:** `probe_read_role --host <sh> --index cus_acme_web --other-index cus_globex_web --sourcetype <st>`
+  1. `authentication/current-context`: capability list; fails if any write capability is held (`admin_all_objects`, `install_apps`, `edit_tcp`, `indexes_edit`, `can_delete`, `edit_deployment_server` and others).
+  2. The discovery reads, each with status and row count: `tstats` volume by host, samples with `len(_raw)`, `_indextime - _time`, `fieldsummary`, parser warnings (`index=_internal sourcetype=splunkd log_level=WARN component IN (LineBreakingProcessor DateParserVerbose AggregatorMiningProcessor) "<st>"`).
+  3. Negative: `| tstats count where index=cus_globex_web` must be 0.
+  4. REST reads: `configs/conf-props`, `apps/local`, `datamodel/model`, `data/indexes`; and whether `| rest` works from SPL for this role.
+  5. Search filter: add a role search filter for `_internal` (for example `index=_internal component IN (…) OR index!=_internal`; Splunk applies role filters to every search, so check it does not hide customer data), rerun, and compare the "other components" count.
+  6. Remove capabilities one at a time and record the first failure of each read.
+- **What decides what:** the smallest capability set where every read in step 2 and 4 passes and step 3 stays 0 becomes the generated `parsemaxxing_read` role. If the filter can restrict `_internal` without hiding customer data, the script includes it; if not, the role keeps `_internal` and the tenant base-search helper is the only restriction (recorded as residual risk). `list_all_objects` is recorded explicitly (Q9 found it needed for `configs/conf-*` reads on a clean install).
+- **Expectation:** `search` plus `list_all_objects` (and `rest_properties_get` for REST reads) is enough; a role search filter applies to all indexes, so restricting only `_internal` needs a filter written as `(index!=_internal) OR (component IN (…))`.
+- **Probe script:** `probe_read_role`.
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**
+
+## Q17. Post-deploy verification
+
+- **Question:** what can be read back per tier over REST to prove the effective settings after a deployment?
+- **Why it matters:** blocks every adapter's `verify` step in Phase 18 (installed version and hash, effective settings on a search head and on the parsing tier).
+- **Lab setup:** a probe add-on installed on the standalone, pushed to the SHC (Q13) and to an HF directly and through the DS (Q14); the read token on each node.
+- **Probe steps:** `probe_readback --host <node> --app <app> --sourcetype <st> [--transform <name>]` on the standalone, one SHC member, the deployer, each HF and the HF-DS. It reads `apps/local/<app>` (version and any hash-like field), `configs/conf-props/<st>` in the app's context, the `search` app's context and globally, `properties/props/<st>`, the transform in app and global context, and lists every app defining the stanza with its `eai:acl` app.
+- **What decides what:** per tier, the reads that return the package's values become the `verify` reads. Where nothing can be read back (an HF without a REST read account, or a deployer that does not apply the app), `verify` relies on the smoke search on new events and says so. If no hash is exposed, verification compares version plus effective settings, and the package hash stays proven only at delivery (relay `stage` or REST install).
+- **Expectation:** version is readable everywhere, no install hash is exposed; members and HFs return merged effective settings in app context; the deployer shows nothing for `etc/shcluster/apps`.
+- **Probe script:** `probe_readback`.
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**
+
+## Q18. SSH library for the relay client (desk research)
+
+- **Question:** `asyncssh` or `paramiko` for the engine side of the relay connection?
+- **Why it matters:** Phase 18 relay client: Ed25519 keys from the vault, a pinned host key, the forced-command verbs with a package or a Splunk token on stdin, and output streamed line by line to the live console over server-sent events. A new library needs a line in the design's tech stack table (D8).
+- **Comparison:**
+
+  | | `asyncssh` | `paramiko` |
+  | --- | --- | --- |
+  | Model | Native `asyncio`, fits the FastAPI engine and line-by-line streaming without threads | Blocking; needs a thread per session under `asyncio` |
+  | Maintenance | Active, regular releases, one long-standing maintainer | Active, regular releases, long history and wide use |
+  | Host key pinning | `known_hosts` accepts an in-memory list or a callable, so the pinned fingerprint can be enforced from the vault with no file | `MissingHostKeyPolicy` subclass with `RejectPolicy`; works, easy to misconfigure as `AutoAddPolicy` |
+  | Keys | Ed25519 import from memory, no file needed | Ed25519 supported; import from memory works |
+  | Licence | EPL-2.0 (GPL-2.0-or-later as secondary): weak copyleft at file level; using it unmodified in a commercial product is allowed | LGPL-2.1: allows commercial use as an unmodified, separately installed library |
+  | CVE history (client relevant) | CVE-2023-46445, CVE-2023-46446 (rogue session and extension attacks, fixed in 2.14.1), CVE-2023-48795 (Terrapin, mitigated in 2.14.2); an older server-side authentication bypass does not affect a client | CVE-2023-48795 (Terrapin, fixed in 3.4.0), CVE-2022-24302 (race when writing private key files), older server-side authentication bypasses (CVE-2018-1000805, CVE-2018-7750) that do not affect a client |
+
+- **Recommendation: `asyncssh`.** It streams relay output natively in the engine's event loop, pins host keys from memory without a `known_hosts` file, and loads the key from the vault without writing it to disk. Its CVE record is short and fixed promptly; Terrapin hit both libraries. Pin a minimum version above the Terrapin fix, enable only strict key exchange, and let `pip-audit` gate upgrades as for every dependency. The EPL-2.0 licence allows commercial use; Parsemaxxing uses it unmodified, so no source obligations arise.
+- **To check at decision time:** this comparison reflects public advisories up to its writing; rerun `pip-audit` and the OSV database for both before confirming.
+- **Status:** proposed, owner to confirm.
+- **Decision:**
+
+## Q19. Embedding model and chart library (desk research)
+
+- **Question:** which embedding model for the offline knowledge base (local ONNX, D4) and which chart library for the analytics UI, both with licences that allow commercial use?
+- **Why it matters:** the knowledge base (7.12) ships the embedding model with Parsemaxxing, so its licence ships too; the analytics pages (7.8) need charts in the Next.js and shadcn/ui stack. The owner plans to commercialise, so non-commercial licences are out.
+- **Embedding model options:**
+
+  | Model | Licence | Size, dimensions | Notes |
+  | --- | --- | --- | --- |
+  | `BAAI/bge-small-en-v1.5` | MIT | about 33 M parameters, 384 | Strong retrieval quality for its size, ONNX exports available, CPU-friendly |
+  | `sentence-transformers/all-MiniLM-L6-v2` | Apache-2.0 | about 22 M, 384 | Smaller and faster, weaker on retrieval benchmarks |
+  | `nomic-embed-text-v1.5` | Apache-2.0 | about 137 M, 768 | Better quality, long context, slower on CPU, needs task prefixes |
+  | Models under CC BY-NC (for example some newer multilingual embedding models) | Non-commercial | | Excluded |
+
+- **Recommendation: `bge-small-en-v1.5`**, run with ONNX Runtime (MIT), pinned by file hash, with its licence file shipped next to the weights. It runs on servers without a GPU, keeps pgvector rows small (384 dimensions) and its licence allows commercial use and redistribution. Fallback: `all-MiniLM-L6-v2` if CPU time is the constraint. The corpus is English (`.spec` files, CIM descriptions), so a multilingual model brings nothing.
+- **Chart library options:** Recharts (MIT; shadcn/ui's chart components are built on it), Apache ECharts (Apache-2.0), Highcharts (commercial licence required: excluded).
+- **Recommendation: Recharts**, through shadcn/ui's chart components, so charts follow the existing theme and accessibility patterns and no second styling system is added. ECharts only if a chart type Recharts lacks becomes necessary.
+- **Status:** proposed, owner to confirm. Both need a line in the design's tech stack table (D8).
+- **Decision:**
+
+## Q20. W3C/IIS and other header-defined formats
+
+- **Question:** for W3C/IIS and CSV, search-time `DELIMS`/`FIELDS` (header lines are still indexed as events) or `INDEXED_EXTRACTIONS` (handles headers, but must live on the forwarder or first parsing tier and stores fields as indexed fields)? How are header lines kept out of CIM data models without `nullQueue`?
+- **Why it matters:** blocks the formats work (7.17) for W3C, CSV and delimited formats: the gate keys `INDEXED_EXTRACTIONS`, `TIMESTAMP_FIELDS` and `HEADER_FIELD_LINE_NUMBER` are allowed only if this decides for them, and then the plan must place them on the parsing tier. Q4 kept `INDEXED_EXTRACTIONS` out of v1.
+- **Lab setup:** the standalone sandbox, `pmx_test`, the packages folder; the read and deploy tokens.
+- **Probe steps:** `probe_formats --host <sandbox> --lab-write --index pmx_test [--oneshot]`
+  1. Installs one add-on with four sourcetypes: W3C with `REPORT-` to `DELIMS = " "` and `FIELDS`, W3C with `INDEXED_EXTRACTIONS = w3c`, CSV with `DELIMS = ","`, CSV with `INDEXED_EXTRACTIONS = csv` and `TIMESTAMP_FIELDS`. Each has an eventtype that excludes the header lines by term.
+  2. Sends a synthetic file of each (four `#` directive lines plus three events for W3C; a header row plus three rows for CSV) through `receivers/simple`, and with `--oneshot` also through `data/inputs/oneshot` from the packages folder, since structured extraction is expected to run only where a file is read.
+  3. Per sourcetype and path: event count (expect 3), header lines indexed as events, events with `cs_uri_stem`, indexed hits (`| tstats count where … cs_uri_stem=*`) and events kept by the header-excluding eventtype.
+  4. Manual, if `INDEXED_EXTRACTIONS` wins: put the same sourcetype on the HF that reads a monitored file and confirm the fields arrive indexed on the indexers with the search head seeing them.
+- **What decides what:** if `INDEXED_EXTRACTIONS` applies only on file inputs, the sandbox test must ingest with oneshot for those formats and the plan must put the stanza on the HF (or UF) that reads the file; if the eventtype filter keeps header lines out of `tag=` searches, CIM mapping uses it and `nullQueue` stays unused. Otherwise search-time `DELIMS`/`FIELDS` with the eventtype filter is the default and header lines are counted and excluded by the Validator.
+- **Expectation:** `receivers/simple` does not apply `INDEXED_EXTRACTIONS`; oneshot does; the eventtype filter excludes header lines from data model searches.
+- **Probe script:** `probe_formats`.
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**
+
+## Q21. `datamodel/model` vs the package JSON
+
+- **Question:** what does `datamodel/model` return on 10.2 and 10.6 (fields, `expected_values`, constraints, child datasets) compared with the same version's package JSON, so the local-changes check compares like with like? Does `apps/local/Splunk_SA_CIM` give the exact x.y.z version to the read account?
+- **Why it matters:** blocks the CIM library's same-version rule and local-changes check (7.16), and the deployment plan's CIM re-check.
+- **Lab setup:** the CIM add-on installed on the sandbox and the SHC; the same version's package downloaded by the owner and extracted outside the repo (only `default/data/models/*.json`; never committed); the read token.
+- **Probe steps:** `probe_cim --host <sh> --package-dir <extracted>/default/data/models`
+  1. `GET apps/local/Splunk_SA_CIM`: version, and whether it has three parts.
+  2. `GET servicesNS/nobody/Splunk_SA_CIM/datamodel/model`: number of models and the content keys (which key holds the JSON: `eai:data`, `description` or other).
+  3. Per model, a normalized summary (per dataset: parent, constraint searches, fields with type, `recommended` and `expected_values`, calculated output fields) and its hash, for REST and for the package file; same hash or the datasets present on one side only.
+  4. Edit one model by hand on a member (add a field), rerun, and confirm only that model's hash changes.
+- **What decides what:** same hashes on an unmodified install → the local-changes check compares normalized summaries by hash. Differences on an unmodified install (for example REST drops `comment` or `expected_values`) → the normalizer records which parts REST cannot give and the check compares only those parts, with a test written for each difference. If the read account cannot read the version, the generated role gets the missing capability or the admin enters the version.
+- **Expectation:** REST returns the same JSON as the package in `eai:data`, so hashes match; `expected_values` survive.
+- **Probe script:** `probe_cim`.
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**
+
+## Q22. CIM compatibility on 10.2 and 10.6
+
+- **Question:** confirm the owner-provided table (D10: 10.2 to 10.6 support `Splunk_SA_CIM` 6.3.0 and later; 10.7 and later need 8.5.0 and later) by installing the oldest allowed CIM (6.3.0) and the newest on 10.2 and 10.6, and check that the CIM normalizer reads 6.x and 8.x definitions the same way.
+- **Why it matters:** fixes the compatibility table in `environments/versions.py` and `docs/setup.md`, and the normalizer's tests (7.16). The table is settled; the lab records evidence and any format difference.
+- **Lab setup:** the sandbox on 10.2 and on 10.6; CIM 6.3.0 and the newest CIM, installed one at a time; both packages extracted outside the repo.
+- **Probe steps:**
+  1. For each (Splunk, CIM) pair: install the CIM add-on, check `GET messages` and the Splunk Web app page for errors, then `probe_cim --host <sandbox> --package-dir <that version's models>`; it prints the minimum for that Splunk version and whether the installed CIM meets it.
+  2. Run `| tstats summariesonly=false count from datamodel=Authentication` and `Network_Traffic` on `pmx_test` with the search token.
+  3. Compare the 6.3.0 and newest summaries per model: datasets, field keys, where `expected_values` and `recommended` live.
+- **What decides what:** every difference in layout between 6.x and 8.x becomes a normalizer test with a definition file written for the test (never Splunk's file); a CIM version that fails to install on a supported Splunk version narrows the table and goes back to the owner.
+- **Expectation:** both install cleanly; the JSON layout is the same, with more models and fields in 8.x.
+- **Probe script:** `probe_cim` (plus manual installs).
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**
+
+## Q23. Overlay precedence
+
+- **Question:** on 10.2 and 10.6, which app name and placement make an overlay's `props`/`transforms` settings win over another app's for the same sourcetype stanza: at index time on a heavy forwarder, and at search time on a standalone search head and a search head cluster member? How is the effective value read back per tier to prove it?
+- **Why it matters:** blocks overlays (7.18). If the standard name `TA-parsemaxxing-overlay-<vendor>-<product>` does not win, the name follows this result and the naming rule and the gate's name check are extended to that one pattern, with adversarial tests.
+- **Background (Splunk's documented precedence, to be confirmed):** in the global context (index time), system `local/` wins, then every app's `local/`, then every app's `default/`, then system `default/`; between apps, directory names in ASCII order decide (uppercase before lowercase, the earlier name wins). Search time uses the app/user context, where the current app wins over other apps. So an overlay named `TA-parsemaxxing-…` would lose to a vendor app named `Splunk_TA_…` or `TA-acme…` in `default/` versus `default/`.
+- **Lab setup:** the standalone sandbox; one HF plus a search head that sees `pmx_test` on the indexers; one SHC member; the packages folder on the node under test.
+- **Probe steps:** `probe_overlay --host <node> --lab-write --index pmx_test [--search-host <sh>] [--vendor-name …] [--overlay-name …]`
+  1. For each simulated vendor app (default `Splunk_TA_acmeprobe__test_probe`, which sorts before `TA-`, and `zz_acmeprobe__test_probe`, which sorts after), each overlay name (default `TA-parsemaxxing-overlay-acme-probe__test_probe`) and each placement of the overlay's settings (`default/` or `local/`): install both, ingest one event, and record the index-time winner (`TZ`: `UTC` for the vendor, `Pacific/Chatham` for the overlay, read from `_time`), the search-time winner (`EVAL-pmx_winner`) and the global REST value.
+  2. Try other overlay names that sort first (for example a name starting with an uppercase letter or a digit) with `--overlay-name`, if the standard name loses in `default/`.
+  3. On a SHC member: push both apps through the deployer (Q13) and run `probe_readback` and the same search there.
+  4. By hand, on each node: `splunk btool props list pmx_probe_ovl__test_probe --debug` to see the winning file.
+  5. Package `local/` placement: also check what `update=true` does to an overlay package's own `local/` on reinstall (Q11 showed it keeps an admin's `local/`; a package-supplied `local/` may then never update).
+- **What decides what:** the name and placement that win on every tier for both vendor names, on both versions, become the overlay rule. `local/` placement conflicts with the rule that `local/` belongs to admins (Q6, Q11) and probably breaks updates, so it is chosen only if no `default/` name works and the owner accepts it. The read-back that shows the winner per tier becomes the gate's "setting takes effect" check.
+- **Expectation:** in `default/`, the standard overlay name loses to `Splunk_TA_…` and wins over `zz_…`; an overlay in `local/` wins over any vendor `default/` at index time.
+- **Probe script:** `probe_overlay`, `probe_readback`.
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**
+
+## Q24. Removing one job's events without `delete`
+
+- **Question:** what is the cleanest way to remove one job's events from the sandbox's `pmx_` test index on 10.2 and 10.6 without giving Parsemaxxing's search account the `delete` capability: short index retention, a per-job index rolled and frozen, or `splunk clean eventdata` on a dedicated job index in a maintenance window? What is the effect on concurrent jobs?
+- **Why it matters:** blocks the retention purge (7.19): real events in the sandbox index count as real logs and must be gone within 30 days of job end.
+- **Known conflict to resolve:** 7.19 asks for `frozenTimePeriodInSecs` of at most 30 days, but Q9 chose a size cap instead of age-based retention because sample events carry historical timestamps: Splunk freezes a bucket by its newest event's `_time`, not by when it was indexed, so old samples could freeze before the Validator reads them. The probe measures how many events that would affect.
+- **Lab setup:** the sandbox, `pmx_test` with events from at least two probe sourcetypes (two "jobs"), the read token; the deploy token for `--roll`.
+- **Probe steps:** `probe_retention --host <sandbox> --index pmx_test [--lab-write --roll --wait 120]`
+  1. `GET data/indexes/pmx_test`: `frozenTimePeriodInSecs`, `maxTotalDataSizeMB`, `maxHotSpanSecs`, `maxHotBuckets`, `maxDataSize`, event count, size, `coldToFrozenDir`; verdict against 30 days.
+  2. `| dbinspect index=pmx_test | stats count by state`.
+  3. Per sourcetype: count, `_time` range, the gap between first `_time` and first `_indextime`, and how many events are older than the retention period.
+  4. `--roll`: `POST data/indexes/pmx_test/roll-hot-buckets`, wait, reread step 3, and report every sourcetype whose count changed (the effect on other jobs).
+  5. Manual: on a dedicated `pmx_job_<id>` index, stop Splunk in a maintenance window and run `splunk clean eventdata -index pmx_job_<id> -f`; record downtime and whether other indexes were touched. Note that creating per-job indexes conflicts with Q9 (the engine never creates or deletes indexes).
+- **What decides what:** if rolled buckets with old `_time` freeze at once, age-based retention cannot be the purge mechanism for historical samples; the options become (a) a size cap plus ingesting samples with `_time` rewritten to ingest time only for retention purposes (which breaks timestamp checks, so likely no), (b) a small set of pre-created rotating `pmx_` indexes (for example one per week) cleaned in a maintenance window, or (c) accepting retention by `_indextime` through `maxHotSpanSecs` and bucket rolling. The chosen option must not affect a running job's events.
+- **Expectation:** rolled buckets whose newest event is older than `frozenTimePeriodInSecs` freeze at the next retention check, taking other jobs' old-timestamp events with them.
+- **Probe script:** `probe_retention`.
+- **Status:** open — awaiting owner lab run.
+- **Evidence 10.2:**
+- **Evidence 10.6:**
+- **Decision:**

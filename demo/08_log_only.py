@@ -1,4 +1,4 @@
-"""RECORD THIS: just the log, no answer key (post-Phase 7). Run through demo/08_log_only.sh.
+"""Scenario: just the log, no answer key (post-Phase 7). Run through demo/08_log_only.sh.
 
 fw        (default) a fresh firewall log, nothing else. The agents do all the work; the
           Validator proves on every event, with no manifest, that each time equals the time

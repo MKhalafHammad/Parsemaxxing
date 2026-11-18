@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RECORD THIS: a parser update (Phase 7).
+# Scenario: a parser update (Phase 7).
 #
 #   demo/06_parser_update.sh [patch] [TA name]   firmware v2 samples: Diagnose with no model call,
 #                                                only the failing stages patched, old and new
