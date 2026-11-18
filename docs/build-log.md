@@ -520,7 +520,7 @@ One entry per completed phase, appended at the end of the phase (see CLAUDE.md, 
 - API errors in one envelope with a request id; the web UI reads it. Error logs carry only the exception type and the request id; request bodies refuse unknown fields; URL settings refuse a user name or password. `make up` refuses a non-loopback `HTTPS_BIND` without `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes` and only warns when `LLM_API_KEY` is missing from `.env`.
 
 **Test results**
-- pytest on a host without PostgreSQL: 553 passed, 127 skipped (the database tests skip without PostgreSQL; CI runs them). Playwright, `make security`, the `images` and `restore-test` CI jobs: not re-run for this entry; see the pull request's CI.
+- pytest with PostgreSQL: 715 passed, 1 skipped (the real `pg_dump | age` round trip, which needs those tools; it passed once in a container). Playwright: 18 passed. bandit, semgrep, pip-audit and npm audit clean; `scripts/restore_test.sh` passed in a scratch stack.
 
 **Cut or deferred**
 - Per-job settings snapshots (the snapshot function exists; settings are read at process start), the wizard listing removable `.env` keys (Phase 15), the package store in backups (Phase 17b), the `pgvector/pgvector` image switch (Phase 20; the collation change needs a REINDEX plan), `make relay-test` (with the relay), TLS verification by default to Splunk (R2, still off), the R11 dev-dependency update.
@@ -535,7 +535,7 @@ One entry per completed phase, appended at the end of the phase (see CLAUDE.md, 
 - Screens: sign in, MFA step, recovery code, setup, MFA enrolment, account security, API tokens, users and audit log, with `<AdminOnly>` on admin controls. The engine trusts `X-Forwarded-For` only from the web container, and the web container forwards it only when the `https` proxy's `X-Pmx-Hop` secret matches (checked live: Caddy replaces a forged value). An open event stream re-checks its credential every 15 s.
 
 **Test results**
-- pytest on a host without PostgreSQL: 604 passed, 225 skipped (the database tests, including most of `auth/test_auth.py`, skip without PostgreSQL; CI runs them). Playwright: 41 of 41 passed at the UX review (head `5167f85`); the review fixes added tests that were not re-run for this entry. `make security` and the CI image jobs: see the pull request's CI.
+- pytest with PostgreSQL: 828 passed, 1 skipped (the `pg_dump | age` round trip). Playwright: 52 passed, including axe scans as admin and viewer and the proxy-hop tests. bandit, semgrep, pip-audit and npm audit clean. Caddy replacing a forged `X-Pmx-Hop` was checked live in a throwaway container.
 - pre-commit on every changed doc: clean (gitleaks, whitespace, end of file, merge conflicts, private keys).
 
 **Cut or deferred**
