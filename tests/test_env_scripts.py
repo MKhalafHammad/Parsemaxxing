@@ -56,8 +56,8 @@ def test_init_generates_placeholder_passwords_and_never_prints_them(repo: Path) 
     assert len({values["POSTGRES_PASSWORD"], values["POSTGRES_APP_PASSWORD"]}) == 2
     assert values["WEB_PORT"] == "3000"
     assert stat.S_IMODE((repo / ".env").stat().st_mode) == 0o600
-    # The key is still a placeholder, so it says so and fails.
-    assert r.returncode == 1 and "LLM_API_KEY" in r.stderr
+    # The key is still a placeholder, so it says so and fails with its own code.
+    assert r.returncode == 2 and "LLM_API_KEY" in r.stderr
 
 
 def test_init_keeps_passwords_already_set(repo: Path) -> None:

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-command stack for judges and local use (`make up`):
-#   1. .env: created from .env.example if missing, placeholder passwords generated;
+#   1. .env: created from .env.example if missing, placeholder passwords generated; secrets/
+#      (KEK and database passwords, scripts/make_secrets.py) created if missing;
 #   2. Splunk and PostgreSQL started and healthy;
 #   3. Splunk prepared (scripts/splunk_bootstrap.py, inside the container): test index, roles,
 #      users, the CIM add-on and its index macros, and fresh service tokens written to .env;
@@ -14,6 +15,20 @@ if [ -n "${SUDO_USER:-}" ]; then # as root, .env would end up owned by root
 fi
 DOCKER=${DOCKER:-docker}
 compose() { $DOCKER compose "$@"; }
+
+# The UI has no login yet: the https proxy stays on loopback unless the admin opts in (M3).
+bind=${HTTPS_BIND-$(grep -sE '^HTTPS_BIND=' .env | tail -n1 | cut -d= -f2- | tr -d "\"' " || true)}
+case "$bind" in
+  "" | 127.0.0.1 | ::1 | "[::1]" | localhost) ;;
+  *)
+    if [ "${PMX_ALLOW_UNAUTHENTICATED_NETWORK:-}" != yes ]; then
+      echo "refused: HTTPS_BIND=$bind would expose the UI, which has no login yet (login lands in Phase 13)." >&2
+      echo "  Use 127.0.0.1, or set PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes to accept the risk." >&2
+      exit 1
+    fi
+    echo "warning: HTTPS_BIND=$bind exposes the UI without a login (PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes)" >&2
+    ;;
+esac
 
 health() { # service -> healthy|starting|unhealthy|exited|missing
   local id
@@ -35,7 +50,15 @@ wait_healthy() { # service, seconds
   return 1
 }
 
-python3 scripts/init_env.py
+rc=0
+python3 scripts/init_env.py || rc=$?
+case $rc in
+  0) ;;
+  2) # the key may live in the vault (`parsemaxxing settings import-env`) instead of .env
+    echo "warning: LLM_API_KEY not set in .env: the engine will use the vault value; runs fail if the vault has none either" >&2 ;;
+  *) exit "$rc" ;;
+esac
+DOCKER="$DOCKER" python3 scripts/make_secrets.py
 DOCKER="$DOCKER" scripts/migrate_v1_volumes.sh # v1 (parsewright_*) volumes; no-op otherwise
 
 echo "starting Splunk and PostgreSQL (Splunk's first start takes a few minutes)"

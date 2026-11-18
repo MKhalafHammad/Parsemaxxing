@@ -4,13 +4,14 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
+import { ErrorText } from "@/components/ui/error-text";
 import { Input, Label } from "@/components/ui/input";
 import { api, type TA } from "@/lib/api";
 
 /** "New run" as a side sheet: every upload field and its hints, a new TA or an update. */
 export function NewRunSheet({ open, onClose, tas, onQueued }: { open: boolean; onClose: () => void; tas: TA[]; onQueued: (message: string) => void }) {
   const [updateOf, setUpdateOf] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | Error>("");
   const [busy, setBusy] = useState(false);
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
@@ -29,7 +30,7 @@ export function NewRunSheet({ open, onClose, tas, onQueued }: { open: boolean; o
       setUpdateOf("");
       onClose();
     } catch (err) {
-      setError((err as Error).message);
+      setError(err as Error);
     } finally {
       setBusy(false);
     }
@@ -87,7 +88,7 @@ export function NewRunSheet({ open, onClose, tas, onQueued }: { open: boolean; o
         </Button>
         {error && (
           <p role="alert" className="text-sm text-bad">
-            {error}
+            <ErrorText error={error} />
           </p>
         )}
       </form>

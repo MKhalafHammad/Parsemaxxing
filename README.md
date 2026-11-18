@@ -108,7 +108,7 @@ Built is what the code does today; the full list is in [docs/features.md](docs/f
 | Web UI: live run workspace, raw vs parsed, approval bound to the package's SHA-256, TA registry | **Built** |
 | Parser updates: find what broke with no model call, patch only that, keep every version for rollback | **Built** |
 | One-command setup (`make up`) that starts and prepares its own Splunk | **Built** |
-| Hardened runtime, settings from the UI, encrypted secrets vault, ledger hash chain | Planned (Phase 12) |
+| Hardened Docker runtime, settings service, encrypted secrets vault, ledger hash chain, encrypted database backups | **Built** (Phase 12, in review); settings screens planned (Phase 15) |
 | Login with `viewer` and `admin` roles, MFA, API tokens; LDAP | Planned (Phases 13–14) |
 | App shell with navigation and a setup wizard | Planned (Phase 15) |
 | Any LLM provider and model, chosen per agent | Planned (Phase 16) |
@@ -171,13 +171,13 @@ Every step, from installing Docker to approving your first add-on, is in **[docs
 | Muse Spark (`muse-spark-1.3`) via the Meta Model API | All agent reasoning: profiling, index-time settings, field extraction, CIM mapping |
 | Muse Spark Open | **On-prem mode:** the same code with a different `LLM_BASE_URL`, so logs never leave your network |
 
-The model is set only through environment variables (`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`), never in code. Any provider, chosen per agent, is planned (Phase 16).
+The model is set only through settings (`llm.base_url`, `llm.model`, the key in the vault) or the environment variables `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY`, never in code. Any provider, chosen per agent, is planned (Phase 16).
 
 ## Security
 
 - **Do not upload real production logs to a hosted model.** Use the synthetic generator, mask your data, or use on-prem mode. Masking before any hosted model and deleting real logs 30 days after a job ends at most are planned (Phase 21).
 - Agents cannot deploy; test deploys use separate names and `pmx_*` indexes only; every port is bound to `127.0.0.1`.
-- There is no login yet: keep the platform on localhost until Phases 12 to 14 land.
+- There is no login yet: keep the platform on localhost until Phases 13 and 14 land.
 - The v2 security baseline (OWASP Top 10:2025, OWASP Top 10 for LLM Applications 2025, OWASP Top 10 for Agentic Applications 2026, and more) maps each control to code, test and status: [docs/security-baseline.md](docs/security-baseline.md). Threat model: [docs/threat-model.md](docs/threat-model.md).
 - Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
@@ -187,7 +187,7 @@ The model is set only through environment variables (`LLM_BASE_URL`, `LLM_MODEL`
 - Four formats (JSON, key=value, syslog, CSV) and three CIM models (Authentication, Network_Traffic, Web).
 - Without an answer key, code proves every time and value, but not meaning: a wrongly stated timezone, or a value mapped to the wrong but allowed CIM value, passes the checks. The approval report lists those decisions for the human who approves.
 - No login: the web UI is for localhost only.
-- Settings live in `.env`; one LLM provider at a time.
+- Settings come from `.env` or are imported once from it into the settings store and vault (`parsemaxxing settings import-env`); there is no settings screen yet. One LLM provider at a time.
 
 ## Documentation
 

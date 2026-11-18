@@ -5,11 +5,12 @@
 //    to its own scripts).
 import { NextResponse, type NextRequest } from "next/server";
 
+import { errorResponse } from "@/lib/error-envelope";
 import { allowedHost } from "@/lib/hosts";
 
 export function proxy(req: NextRequest) {
   if (!allowedHost(req.headers.get("host"))) {
-    return new NextResponse("unknown host", { status: 421 });
+    return errorResponse(421, "misdirected_request", "unknown host");
   }
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const csp = [

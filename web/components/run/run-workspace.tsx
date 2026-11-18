@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { ErrorText } from "@/components/ui/error-text";
 import { api, type LedgerEvent, type RunDetail } from "@/lib/api";
 import { obj, str, toEntries, type Entry, type PhaseId } from "@/lib/events";
 import { budget, currentPhase, describeNow, isUpdate, phases as phasesOf, railOf } from "@/lib/phases";
@@ -27,14 +28,14 @@ function tzNoteOf(run: RunDetail): string | undefined {
 export function RunWorkspace({ id }: { id: string }) {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [events, setEvents] = useState<LedgerEvent[]>([]);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | Error>("");
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
   const params = useSearchParams();
 
   const refresh = useCallback(() => {
     api<RunDetail>(`/runs/${id}`)
       .then(setRun)
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => setError(e));
   }, [id]);
 
   useEffect(() => {
@@ -59,7 +60,7 @@ export function RunWorkspace({ id }: { id: string }) {
 
   const entries = useMemo<Entry[]>(() => toEntries(events), [events]);
 
-  if (error) return <p role="alert" className="text-bad">{error}</p>;
+  if (error) return <p role="alert" className="text-bad"><ErrorText error={error} /></p>;
   if (!run) return <p>Loading…</p>;
 
   const update = isUpdate(run, entries);

@@ -1,21 +1,28 @@
 # Parsemaxxing developer commands. Run `make setup` once after cloning.
-.PHONY: setup env up first-run down logs test lint security
+.PHONY: setup env secrets up first-run down logs test e2e lint security lock digests sbom scan \
+	backup restore restore-test
 
 VENV := .venv
 BIN := $(VENV)/bin
 
-setup:
-	@[ -f .env ] || { cp .env.example .env && echo "Created .env from .env.example: fill in the placeholders."; }
-	@chmod 600 .env
+setup: secrets
 	python3 -m venv $(VENV)
 	$(BIN)/pip install --upgrade pip
 	$(BIN)/pip install -e 'engine[dev]'
 	$(BIN)/pre-commit install
 	cd web && npm ci
+	@echo "Back up secrets/pmx_kek away from this server (sudo cat secrets/pmx_kek): without it every stored secret is lost."
 
 # Create .env and generate placeholder passwords (no secret is printed).
 env:
 	python3 scripts/init_env.py
+
+# .env (as `make env`; exit 2 = LLM key still a placeholder) and the Docker secrets in secrets/:
+# the KEK and the database passwords, each 0400 and owned by the containers' uid. Never
+# overwrites a file; takes the passwords from .env so an existing database keeps working.
+secrets:
+	python3 scripts/init_env.py || [ $$? -eq 2 ]
+	python3 scripts/make_secrets.py
 
 # The whole stack, Splunk prepared, in one command (scripts/up.sh). DOCKER="sudo docker" if needed.
 up:
@@ -33,6 +40,9 @@ logs:
 
 test:
 	$(BIN)/pytest engine/tests tests
+	$(MAKE) e2e
+
+e2e:
 	cd web && npm run build && npm run test:e2e
 
 lint:
@@ -46,4 +56,32 @@ security:
 	$(BIN)/pip-audit --skip-editable
 	# Shipped packages only; dev tooling advisories are tracked in threat-model R11.
 	cd web && npm audit --audit-level=moderate --omit=dev
+	cd web && npm audit signatures
 	gitleaks git --redact --verbose .
+
+# Engine runtime dependencies, pinned with hashes, released at least two weeks ago (set the
+# date). hatchling, the build backend, is added so the image builds without isolation.
+lock:
+	echo 'hatchling>=1.32' | uv pip compile engine/pyproject.toml - \
+	  --generate-hashes --universal --python-version 3.12 --exclude-newer $(or $(BEFORE),2026-11-04) \
+	  -o engine/requirements.lock
+
+# Show where each pinned image tag points now; `make digests WRITE=1` updates the files.
+digests:
+	python3 scripts/refresh_digests.py $(if $(WRITE),--write)
+
+# CycloneDX SBOM per built image into sbom/; Trivy scan failing on fixable HIGH/CRITICAL.
+sbom:
+	scripts/image_check.sh sbom
+scan:
+	scripts/image_check.sh scan
+
+# Encrypted database backup into backups/ (scripts/backup.sh says how to set the age key).
+backup:
+	scripts/backup.sh
+# make restore FILE=backups/pmx-....dump.age IDENTITY=/path/to/pmx-backup.key
+restore:
+	scripts/restore.sh "$(FILE)" "$(IDENTITY)"
+# Backup and restore round trip in a separate compose project (CI job restore-test).
+restore-test:
+	scripts/restore_test.sh

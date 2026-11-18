@@ -93,6 +93,19 @@ export type RunDetail = Job & {
 };
 export type LedgerEvent = { id: number; at: string; event: string; data: Record<string, unknown> };
 
+/** An engine or proxy error: the envelope's message, plus the request id that finds it in the logs. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string,
+    readonly requestId: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api/engine${path}`, {
     ...init,
@@ -101,7 +114,15 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(typeof body?.detail === "string" ? body.detail : `request failed (${res.status})`);
+    // Envelope: {"error": {code, message, request_id}, "detail": message}; `detail` alone is v1.
+    const err = body?.error;
+    const message = err ? err.message : body?.detail;
+    throw new ApiError(
+      typeof message === "string" ? message : `request failed (${res.status})`,
+      res.status,
+      typeof err?.code === "string" ? err.code : "",
+      typeof err?.request_id === "string" ? err.request_id : (res.headers.get("x-request-id") ?? ""),
+    );
   }
   return body as T;
 }

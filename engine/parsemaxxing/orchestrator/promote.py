@@ -112,10 +112,9 @@ class PgRecords:
             params.append(self.worker)
         if self.conn.execute(sql, params).rowcount != 1:
             raise TransitionRefused(f"job {job} cannot move to {new} from its current status")
-        self.conn.execute(
-            "INSERT INTO ledger (job_id, event, data) VALUES (%s, %s, %s)",
-            (job, "record", Jsonb({"status": new})),
-        )
+        from parsemaxxing.ledger.store import Store
+
+        Store(self.conn).event(job, "record", {"status": new})  # ledger rows: store.py only
 
     @contextmanager
     def locked(self, job: str) -> Iterator[None]:

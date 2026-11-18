@@ -1,6 +1,6 @@
 # Features
 
-What is built and what is planned. The README summarises this table. Built rows describe v1 as it is; planned rows name the phase in [build-plan.md](build-plan.md) that builds them, and the design section in [design.md](design.md#v2-platform-design).
+What is built and what is planned. The README summarises this table. Built rows describe the code as it is; planned rows name the phase in [build-plan.md](build-plan.md) that builds them, and the design section in [design.md](design.md#v2-platform-design).
 
 ## v1 (built unless marked)
 
@@ -33,15 +33,16 @@ What is built and what is planned. The README summarises this table. Built rows 
 | A `pmx_audit` index and dashboard for agent activity | Planned (Phase 19) |
 | Generated add-ons carry no PolyForm licence text (test in `engine/tests/ta_builder/`) | **Built** |
 
-## v2 platform (all planned)
+## v2 platform (planned unless marked)
 
 | Feature | Design | Status |
 | --- | --- | --- |
-| Hardened Docker runtime: separate networks, Docker secrets, resource limits, images pinned by digest, hashed Python lock, SBOM and image scan in CI, optional HTTPS profile | 7.7, 7.13 | Planned (Phase 12) |
-| Settings in the UI: typed, versioned settings with history and export; `.env` holds bootstrap values only | 7.5 | Planned (Phase 12) |
-| Secrets vault: AES-256-GCM envelope encryption with a KEK from a Docker secret; secrets never returned by the API | 7.5 | Planned (Phase 12) |
-| Ledger hash chain with `parsemaxxing ledger verify` | 7.7 | Planned (Phase 12) |
-| Encrypted backups of the database and add-on store, with a tested restore | 7.5 | Planned (Phase 12) |
+| Hardened Docker runtime: separate networks (Splunk reached only through a relay), Docker secrets for the KEK and database passwords, PostgreSQL unpublished unless the `cli` profile is on, resource limits, images pinned by digest, hashed Python lock, SBOM and Trivy scan in CI, optional HTTPS profile (Caddy, HSTS) | 7.7, 7.13 | **Built** (Phase 12, in review) |
+| Settings service: typed, versioned settings with history, snapshots by hash, environment-variable overrides shown read-only, export and import with a diff; one-time `parsemaxxing settings import-env` of a v1 `.env` | 7.5 | **Built** (Phase 12, in review). Settings screens and the wizard listing removable `.env` keys planned (Phase 15); per-job snapshots planned (settings are read at process start) |
+| Secrets vault: AES-256-GCM envelope encryption with a KEK from a Docker secret, `parsemaxxing secrets rotate-kek`; the LLM key and the Splunk tokens opened only at the moment of use; `LLM_API_KEY` and `SPLUNK_*_TOKEN`, when set, win over the vault | 7.5 | **Built** (Phase 12, in review). Expiry tracking planned (Phase 17) |
+| Ledger hash chain with `parsemaxxing ledger verify`; `ledger head` and `verify --expect-head` check a head kept off the server; each backup records the head | 7.7 | **Built** (Phase 12, in review). UI integrity badge planned; keeping the head off the server is the admin's step |
+| API errors in one envelope (code, message, request id), `X-Request-ID` on every response, no internals in messages | 7.7 | **Built** (Phase 12, in review) |
+| Encrypted backups (`age`) with a restore tested in CI: `make backup` / `make restore`, `parsemaxxing backup` / `restore`; a `.sha256` file with the ledger head beside each, checked on restore; 30-day pruning | 7.5 | **Built** for the database (Phase 12, in review). The add-on package store planned (Phase 17b) |
 | Local accounts (Argon2id), TOTP MFA, sessions, `viewer` and `admin` roles, API tokens, audit log, setup token at first run | 7.3 | Planned (Phase 13) |
 | Every API route has a role in one policy registry (deny by default); CLI changes go through the API | 7.3 | Planned (Phase 13) |
 | LDAP login (LDAPS or StartTLS), group to role mapping, nested groups, break-glass local admin | 7.4 | Planned (Phase 14) |

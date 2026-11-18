@@ -10,8 +10,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from parsemaxxing.config import Settings, load_env_file
-from parsemaxxing.tools.splunk_client import connect
+from parsemaxxing.config import load_env_file, runtime
+from parsemaxxing.tools.splunk_client import connect_with
 
 MODELS = ("Authentication", "Network_Traffic", "Web")
 OUT = Path(__file__).parent / "cim_spec.json"
@@ -47,8 +47,7 @@ def pin_model(desc: dict) -> dict:
 
 def main() -> None:
     load_env_file(Path(__file__).resolve().parents[3] / ".env")
-    settings = Settings.from_env()
-    svc = connect(settings, settings.splunk_search_token)
+    svc = connect_with(runtime(), "splunk_search_token")
     app = json.loads(svc.get("apps/local/Splunk_SA_CIM", output_mode="json").body.read())
     spec: dict = {
         "source": "Splunk_SA_CIM data model definitions (datamodel/model REST endpoint)",

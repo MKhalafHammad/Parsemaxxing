@@ -1,20 +1,43 @@
-# Parsemaxxing local stack. Every secret comes from .env (see .env.example).
-# Published to the host (127.0.0.1 only): Splunk Web, the web UI, and PostgreSQL on 55432
-# (for the CLI on the host; 5432 is often Splunk 10's own internal PostgreSQL, and 543x ports
-# are often taken by other local services).
-# Internal only: Splunk management port 8089.
+# Parsemaxxing local stack. Values come from .env (see .env.example); the KEK and the database
+# passwords come from Docker secrets in secrets/ (`make secrets`, never committed).
+#
+# Published to the host, 127.0.0.1 only: Splunk Web, the web UI and the engine API. PostgreSQL
+# is published (127.0.0.1:55432, for the host CLI) only with `docker compose --profile cli up`.
+# Splunk's management port 8089 is never published. Optional HTTPS front: `--profile https`.
+#
+# Networks (DK-5, R10): each container reaches only what it needs.
+#   edge        web (and the https proxy)            published ports
+#   app         web <-> engine                       internal
+#   data        engine, migrate <-> postgres         internal
+#   splunk_api  engine <-> splunk-api relay          internal
+#   splunk      splunk-api relay <-> splunk          Splunk Web published
+#   egress      engine only (LLM API, engine port)   internet access
+# Splunk never shares a network with the engine: it reaches only the relay, which forwards only
+# to Splunk's own port 8089, so Splunk cannot call the engine API, PostgreSQL or the web UI.
+#
+# Every image is pinned by digest, tag in the name for readers (scripts/refresh_digests.py).
 name: parsemaxxing
+
+x-hardened: &hardened
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  read_only: true
 
 services:
   splunk:
-    image: splunk/splunk:10.6.1
-    # The image runs as the unprivileged "ansible" user and starts splunkd as "splunk".
+    image: splunk/splunk:10.6.1@sha256:2a7cf9d2e8a2226773a9fac95b5e0e2cc8752496abfb134a21bdf8f67c9ee44d
+    # The image runs as the unprivileged "ansible" user and uses sudo to start splunkd as
+    # "splunk", so no-new-privileges, cap_drop and a read-only root would stop it (residual
+    # risk, DK-2). Its isolation is the network: it reaches only the splunk network. Health:
+    # the image's own HEALTHCHECK.
     environment:
       SPLUNK_START_ARGS: ${SPLUNK_START_ARGS:?set SPLUNK_START_ARGS in .env to accept the Splunk license}
       SPLUNK_GENERAL_TERMS: ${SPLUNK_GENERAL_TERMS:?set SPLUNK_GENERAL_TERMS in .env to accept the Splunk General Terms}
       SPLUNK_PASSWORD: ${SPLUNK_PASSWORD:?set SPLUNK_PASSWORD in .env}
     ports:
       - "127.0.0.1:${SPLUNK_WEB_PORT:-8000}:8000"
+    networks: [splunk]
     volumes:
       - splunk-etc:/opt/splunk/etc
       - splunk-var:/opt/splunk/var
@@ -22,106 +45,265 @@ services:
       - packages:/opt/parsemaxxing/packages:ro
       # Licensed add-ons that cannot be committed (the CIM add-on), read-only (lab/README.md).
       - ./lab:/opt/parsemaxxing/lab:ro,z
+    deploy:
+      resources:
+        limits: { cpus: "4", memory: 6g, pids: 4096 }
+    restart: unless-stopped
+
+  # TCP relay: the engine's only way to Splunk (port 8089, TLS passed through untouched).
+  splunk-api:
+    image: &python python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+    <<: *hardened
+    user: "10001:10001"
+    command: ["python3", "-I", "/opt/relay/tcp_forward.py", "8089", "splunk", "8089"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./scripts/tcp_forward.py:/opt/relay/tcp_forward.py:ro,z
+    networks:
+      splunk: {}
+      splunk_api:
+        aliases: [splunk] # the engine keeps SPLUNK_HOST=splunk
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8089), 3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 64m, pids: 32 }
     restart: unless-stopped
 
   postgres:
-    image: postgres:17.11-alpine
-    # The entrypoint drops to the unprivileged "postgres" user. Localhost only, for the CLI.
-    ports:
-      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    image: &postgres postgres:17.11-alpine@sha256:e5d2edd28b1f8d40a0a6c0c9cdc545b19b56a0d5d88f94bc11a97d970d4700d0
+    # The entrypoint starts as root, reads the password file (owned by uid 10001, hence
+    # DAC_OVERRIDE), fixes the data directory's owner, then drops to the "postgres" user.
+    # Not published: see the postgres-cli service.
+    <<: *hardened
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    networks: [data]
     volumes:
       - pgdata:/var/lib/postgresql/data
+    tmpfs:
+      - /var/run/postgresql:rw,noexec,nosuid,nodev,size=16m
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
-    security_opt:
-      - no-new-privileges:true
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1g, pids: 256 }
+    shm_size: 128m
+    restart: unless-stopped
+
+  # Only with `--profile cli`: PostgreSQL on 127.0.0.1:${POSTGRES_PORT} for the host CLI (the
+  # data network is internal, so PostgreSQL itself cannot publish a port).
+  postgres-cli:
+    profiles: [cli]
+    image: *python
+    <<: *hardened
+    user: "10001:10001"
+    command: ["python3", "-I", "/opt/relay/tcp_forward.py", "5432", "postgres", "5432"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./scripts/tcp_forward.py:/opt/relay/tcp_forward.py:ro,z
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    networks: [data, egress]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 5432), 3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 64m, pids: 32 }
     restart: unless-stopped
 
   # One-shot: migrations and the app role's password. The only service with the database
   # owner's credentials; the engine itself connects as the limited parsemaxxing_app role.
   migrate:
-    build:
+    image: parsemaxxing-engine:local
+    build: &engine-build
       context: ./engine
       additional_contexts:
         repo: .
+    <<: *hardened
     command: ["parsemaxxing", "--env-file", "/dev/null", "migrate"]
     environment:
-      MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_APP_PASSWORD_FILE: /run/secrets/postgres_app_password
+    secrets: [postgres_password, postgres_app_password] # no KEK: migrations decrypt nothing
+    networks: [data]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    healthcheck:
+      disable: true # one-shot; the engine waits for it to complete successfully instead
     depends_on:
       postgres:
         condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-    cap_drop: [ALL]
-    read_only: true
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 512m, pids: 128 }
     restart: "no"
 
   # The engine (API + worker pool), non-root, no Docker socket, no capabilities, read-only
-  # root filesystem.
+  # root filesystem. Health: the image's HEALTHCHECK (GET /health).
   engine:
-    build:
-      context: ./engine
-      additional_contexts:
-        repo: .
+    image: parsemaxxing-engine:local
+    build: *engine-build
+    <<: *hardened
     ports:
       - "127.0.0.1:${ENGINE_PORT:-8080}:8080"
     volumes:
       - packages:/opt/parsemaxxing/packages
       - runs:/app/.runs
     environment:
-      DATABASE_URL: postgresql://parsemaxxing_app:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_APP_PASSWORD_FILE: /run/secrets/postgres_app_password
+      PARSEMAXXING_KEK_FILE: /run/secrets/pmx_kek
       PARSEMAXXING_TEST_INDEX: ${PARSEMAXXING_TEST_INDEX:-pmx_test}
       PARSEMAXXING_RUN_TOKEN_CEILING: ${PARSEMAXXING_RUN_TOKEN_CEILING:-300000}
       ALLOWED_HOSTS: localhost,127.0.0.1,engine
       WEB_ORIGIN: http://localhost:${WEB_PORT:-3000}
       SPLUNK_HOST: splunk
       SPLUNK_PORT: "8089"
-      SPLUNK_SEARCH_TOKEN: ${SPLUNK_SEARCH_TOKEN:?set SPLUNK_SEARCH_TOKEN in .env}
-      SPLUNK_DEPLOY_TOKEN: ${SPLUNK_DEPLOY_TOKEN:?set SPLUNK_DEPLOY_TOKEN in .env}
-      SPLUNK_DRIFT_TOKEN: ${SPLUNK_DRIFT_TOKEN:?set SPLUNK_DRIFT_TOKEN in .env}
-      LLM_API_KEY: ${LLM_API_KEY:?set LLM_API_KEY in .env}
       LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL in .env}
       LLM_MODEL: ${LLM_MODEL:?set LLM_MODEL in .env}
+      # Transitional fallback: used only while the vault has no value for them. After
+      # `parsemaxxing settings import-env` stores them in the vault, remove them from .env.
+      SPLUNK_SEARCH_TOKEN: ${SPLUNK_SEARCH_TOKEN:-}
+      SPLUNK_DEPLOY_TOKEN: ${SPLUNK_DEPLOY_TOKEN:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+    secrets: [pmx_kek, postgres_app_password]
+    networks: [app, data, splunk_api, egress]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
     depends_on:
       migrate:
         condition: service_completed_successfully
       splunk:
         condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-    cap_drop: [ALL]
-    read_only: true
-    tmpfs: [/tmp]
+      splunk-api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 2g, pids: 512 }
     restart: unless-stopped
 
+  # No secret, no KEK, no database access: it reaches only the engine (app network).
   web:
+    image: parsemaxxing-web:local
     build:
       context: ./web
       additional_contexts:
         repo: .
+    <<: *hardened
     environment:
       ENGINE_URL: http://engine:8080
-      # The browser reaches the UI only by these names (DNS-rebinding guard, threat T8.5).
-      ALLOWED_HOSTS: localhost:${WEB_PORT:-3000},127.0.0.1:${WEB_PORT:-3000}
-      WEB_ORIGINS: http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000}
+      # The browser reaches the UI only by these names (DNS-rebinding guard, threat T8.5); the
+      # last two are the https profile's public name, with its port and without (port 443).
+      ALLOWED_HOSTS: localhost:${WEB_PORT:-3000},127.0.0.1:${WEB_PORT:-3000},${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443},${PMX_PUBLIC_HOST:-localhost}
+      WEB_ORIGINS: http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000},https://${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443},https://${PMX_PUBLIC_HOST:-localhost}
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    networks: [edge, app]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    healthcheck:
+      # Any answer below 500 means the server is up (421 when WEB_PORT is not 3000).
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r => process.exit(r.status < 500 ? 0 : 1), () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     depends_on:
       - engine
-    security_opt:
-      - no-new-privileges:true
-    cap_drop: [ALL]
-    read_only: true
-    tmpfs: [/tmp]
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 512m, pids: 256 }
     restart: unless-stopped
+
+  # Only with `--profile https` (or COMPOSE_PROFILES=https in .env): TLS in front of the web UI,
+  # with HSTS (scripts/Caddyfile). PMX_PUBLIC_HOST is the host name the browser uses (default
+  # localhost), HTTPS_PORT the published port (default 8443); PMX_TLS is "internal" (Caddy's own
+  # CA, kept in the caddy-data volume) or "/certs/<cert>.pem /certs/<key>.pem" for an admin
+  # certificate in ./certs. A non-loopback HTTPS_BIND exposes the login-less UI beyond this
+  # machine; `make up` refuses it unless PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes.
+  https:
+    profiles: [https]
+    image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    # Runs as root with two capabilities only (the image has no other user): DAC_READ_SEARCH to
+    # read an admin's private key that is not world-readable, NET_BIND_SERVICE because the caddy
+    # binary carries it as a file capability (exec fails without it). Listens on 8443 inside.
+    <<: *hardened
+    cap_add: [DAC_READ_SEARCH, NET_BIND_SERVICE]
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    environment:
+      PMX_PUBLIC_HOST: ${PMX_PUBLIC_HOST:-localhost}
+      PMX_TLS: ${PMX_TLS:-internal}
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    ports:
+      - "${HTTPS_BIND:-127.0.0.1}:${HTTPS_PORT:-8443}:8443"
+    networks: [edge]
+    volumes:
+      - caddy-data:/data
+      - ./certs:/certs:ro,z
+    tmpfs:
+      - /config:rw,noexec,nosuid,nodev,size=8m
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8443"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - web
+    deploy:
+      resources:
+        limits: { cpus: "1", memory: 256m, pids: 128 }
+    restart: unless-stopped
+
+configs:
+  caddyfile:
+    file: ./scripts/Caddyfile
+
+secrets:
+  pmx_kek:
+    file: ./secrets/pmx_kek
+  postgres_password:
+    file: ./secrets/postgres_password
+  postgres_app_password:
+    file: ./secrets/postgres_app_password
+
+networks:
+  edge: {}
+  app:
+    internal: true
+  data:
+    internal: true
+  splunk_api:
+    internal: true
+  splunk: {}
+  egress: {}
 
 volumes:
   splunk-etc:
@@ -129,3 +311,4 @@ volumes:
   pgdata:
   packages:
   runs:
+  caddy-data:

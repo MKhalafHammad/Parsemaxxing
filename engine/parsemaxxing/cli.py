@@ -10,12 +10,22 @@
   parsemaxxing tas                           the TA registry: promoted TAs and their versions
   parsemaxxing update <app> <file>           patch a promoted TA for new-format samples
   parsemaxxing rollback <app> <version>      reinstall an exact earlier version of a TA
+  parsemaxxing secrets rotate-kek --new-kek-file <path>  rewrap every vault data key
+  parsemaxxing settings import-env [--env-file .env] [--dry-run]  move v1 .env values into
+                                             settings and secrets into the vault (once)
+  parsemaxxing ledger verify [--expect-head <id>:<hash>]  check the ledger hash chain (and
+                                             that a recorded head is still in it)
+  parsemaxxing ledger head                   print the newest row as <id>:<hash> (an anchor)
+  parsemaxxing backup [--out-dir backups]    encrypted pg_dump (age, recipient from settings)
+  parsemaxxing restore <file> --identity <age key> --target-dsn <dsn> --yes
 
 `run --local` runs without PostgreSQL (state in run records), as in Phases 2-4.
 """
 
 import argparse
+import dataclasses
 import json
+import logging
 import os
 import signal
 import subprocess  # nosec B404 - only to start this CLI's own worker processes
@@ -24,6 +34,9 @@ import threading
 import uuid
 from pathlib import Path
 
+import psycopg
+
+from parsemaxxing import config
 from parsemaxxing.agents.llm import LLMClient, TokenCeilingExceeded
 from parsemaxxing.api import intake
 from parsemaxxing.config import REPO, Settings, database_url, load_env_file
@@ -31,7 +44,7 @@ from parsemaxxing.guardrails.index_time import GuardrailBlock
 from parsemaxxing.ledger import store as db
 from parsemaxxing.orchestrator import promote
 from parsemaxxing.orchestrator.caps import IngestCaps
-from parsemaxxing.orchestrator.run import MAX_ATTEMPTS, run
+from parsemaxxing.orchestrator.run import run
 from parsemaxxing.tools.splunk_client import SplunkClient
 
 
@@ -46,7 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--vendor", help="vendor name, if known (e.g. acme)")
     r.add_argument("--product", help="product name, if known (e.g. vpn)")
     r.add_argument("--keep", action="store_true", help="leave the test app installed (--local)")
-    r.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS)
+    r.add_argument("--max-attempts", type=int, help="default: the run.max_attempts setting")
     r.add_argument("--stages", default="index-time,extraction,cim", help="comma-separated")
     r.add_argument(
         "--local",
@@ -77,13 +90,50 @@ def main(argv: list[str] | None = None) -> int:
     b = sub.add_parser("rollback", help="reinstall an exact earlier version of a promoted TA")
     b.add_argument("app")
     b.add_argument("version")
+    sec = sub.add_parser("secrets", help="the secrets vault")
+    sec_sub = sec.add_subparsers(dest="secrets_command", required=True)
+    rk = sec_sub.add_parser("rotate-kek", help="rewrap every data key with a new KEK")
+    rk.add_argument("--new-kek-file", type=Path, required=True)
+    st = sub.add_parser("settings", help="the settings store")
+    st_sub = st.add_subparsers(dest="settings_command", required=True)
+    ie = st_sub.add_parser("import-env", help="one-time import of a v1 .env (secrets: vault)")
+    ie.add_argument("--env-file", dest="import_file", type=Path, help="default: --env-file")
+    ie.add_argument("--dry-run", action="store_true", help="show the diff, write nothing")
+    lg = sub.add_parser("ledger", help="the ledger")
+    lg_sub = lg.add_subparsers(dest="ledger_command", required=True)
+    lv = lg_sub.add_parser("verify", help="check the hash chain (edited, removed or moved rows)")
+    lv.add_argument("--expect-head", help="<id>:<hash> from `ledger head`: must still be there")
+    lg_sub.add_parser("head", help="print the newest ledger row as <id>:<hash>")
+    bk = sub.add_parser("backup", help="encrypted database backup (pg_dump | age)")
+    bk.add_argument("--out-dir", type=Path, default=REPO / "backups")
+    rs = sub.add_parser("restore", help="restore an encrypted backup into a database")
+    rs.add_argument("file", type=Path)
+    rs.add_argument("--identity", type=Path, required=True, help="age identity (private key) file")
+    rs.add_argument("--target-dsn", required=True, help="the database to restore into")
+    rs.add_argument("--yes", action="store_true", help="confirm: target objects are replaced")
     args = parser.parse_args(argv)
 
     load_env_file(args.env_file)
+    logging.basicConfig(level=config.log_level())
     if args.command == "migrate":  # needs only the database owner, not the LLM or Splunk
         migrate()
         return 0
-    settings = Settings.from_env()
+    if args.command == "secrets":  # needs only the database and the KEK files
+        return rotate_kek(args.new_kek_file)
+    if args.command == "settings":
+        return import_env(args.import_file or args.env_file, args.dry_run)
+    if args.command == "ledger":
+        if args.ledger_command == "head":
+            with db.connect(database_url()) as conn:
+                print(db.ledger_head(conn))
+            return 0
+        return verify_ledger(args.expect_head)
+    if args.command in ("backup", "restore"):
+        return backup_or_restore(args)
+    local = args.command == "run" and args.local
+    settings = config.runtime(local=local)
+    if args.command == "run" and args.max_attempts:
+        settings = dataclasses.replace(settings, max_attempts=args.max_attempts)
     try:
         if args.command == "run" and args.local:
             return local_run(args, settings)
@@ -187,7 +237,7 @@ def migrate(optional: bool = False) -> None:
         raise
     with db.connect(admin) as conn:
         applied = db.migrate(conn)
-        if password := os.environ.get("POSTGRES_APP_PASSWORD"):
+        if password := config.app_password():
             db.set_app_password(conn, password)
             print("migrations:", applied or "up to date", "| app role: parsemaxxing_app")
         else:
@@ -196,6 +246,117 @@ def migrate(optional: bool = False) -> None:
                 applied or "up to date",
                 "| WARNING: POSTGRES_APP_PASSWORD not set; the engine uses the owner account",
             )
+
+
+def rotate_kek(new_file: Path) -> int:
+    """Rewrap every data key with the KEK in `new_file`, in one transaction. Stop the engine
+    first: a running engine keeps the old KEK and is refused from then on."""
+    from parsemaxxing.secrets import Kek, VaultError
+    from parsemaxxing.secrets import rotate_kek as rotate
+
+    current = config.kek_path()
+    try:
+        old, new = Kek.load(current), Kek.load(new_file)
+        with db.connect(database_url()) as conn:
+            n = rotate(conn, old, new, actor="cli:rotate-kek")
+    except VaultError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 4
+    except psycopg.errors.InsufficientPrivilege:
+        # psycopg's message can quote SQL; name only the cause (nothing was rewrapped).
+        print(
+            "refused: the database role lacks a privilege rotation needs; nothing was changed"
+            " (run `parsemaxxing migrate` so the grants are current)",
+            file=sys.stderr,
+        )
+        return 4
+    except psycopg.Error as e:
+        print(f"refused: database error ({type(e).__name__}); nothing was changed", file=sys.stderr)
+        return 4
+    print(f"rewrapped {n} data keys: KEK {old.id} -> {new.id}")
+    print(f"now replace {current} with {new_file} (mode 0400), keep a backup, restart the engine")
+    return 0
+
+
+def import_env(env_file: Path, dry_run: bool) -> int:
+    """One-time v1 import: plain values into settings, secrets into the vault. Shows the diff and
+    the variables that can then be removed; never prints a secret value."""
+    from parsemaxxing.secrets import Kek, VaultError
+
+    values = config.read_env_file(env_file)
+    if not values:
+        print(f"nothing to import: no known keys in {env_file}", file=sys.stderr)
+        return 4
+    try:
+        kek = Kek.load(config.kek_path())
+    except VaultError as e:
+        if not dry_run:
+            print(f"refused: {e}", file=sys.stderr)
+            return 4
+        kek = None
+    with db.connect(database_url()) as conn:
+        try:
+            lines, removable, ok = config.import_v1_env(
+                conn, values, kek, dry_run, process_env=config.environ()
+            )
+        except (VaultError, ValueError) as e:  # SettingsError is a ValueError
+            print(f"refused: {e}", file=sys.stderr)
+            return 4
+    print(f"{'dry run: ' if dry_run else ''}import of {env_file}:")
+    print("\n".join(lines) or "  nothing to change")
+    if removable:
+        print(
+            "can be removed from .env and the container environment once imported "
+            "(a variable that stays overrides the stored setting): " + ", ".join(removable)
+        )
+    return 0 if ok else 4
+
+
+def verify_ledger(expect_head: str | None = None) -> int:
+    if expect_head is not None and not db.HEAD.fullmatch(expect_head):
+        print("refused: --expect-head is <id>:<64 hex hash> (from `ledger head`)", file=sys.stderr)
+        return 4
+    with db.connect(database_url()) as conn:
+        result = db.verify_ledger(conn, expect_head=expect_head)
+    for p in result["problems"]:
+        print(f"  row {p['id']}: {p['problem']}")
+    head = result["head"]
+    print(f"{result['rows']} rows; head {head['id']} {head['hash']}")
+    if result["problems"]:
+        print("ledger verify: FAILED", file=sys.stderr)
+        return 5
+    print("ledger verify: ok")
+    return 0
+
+
+def backup_or_restore(args) -> int:
+    from parsemaxxing.ledger import backup
+    from parsemaxxing.settings import PLATFORM, BackupSettings, SettingsService
+
+    try:
+        if args.command == "restore":
+            if not args.yes:
+                print("refused: restore replaces objects in the target; add --yes", file=sys.stderr)
+                return 4
+            result = backup.restore(args.file, args.identity, args.target_dsn, config.environ())
+            print(f"restored {args.file.name}; ledger verified ({result['rows']} rows)")
+            return 0
+        dsn = database_url(admin=True)  # the owner sees every table
+        with db.connect(dsn) as conn:
+            recipient = SettingsService(conn, config.environ()).get(BackupSettings, PLATFORM)
+            head = db.ledger_head(conn)  # before the dump starts: the dump contains this row
+        if not recipient.age_recipient:
+            print("refused: set backup.age_recipient (an age public key) first", file=sys.stderr)
+            return 4
+        path = backup.backup(dsn, recipient.age_recipient, args.out_dir, config.environ(), head)
+    except (backup.BackupError, OSError) as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 4
+    except psycopg.Error as e:  # its message can quote SQL or connection details
+        print(f"refused: database error ({type(e).__name__})", file=sys.stderr)
+        return 4
+    print(f"backup written: {path} (+ .sha256); ledger head {head}")
+    return 0
 
 
 def queued_run(args, settings: Settings, store: db.Store, update_of: str | None = None) -> int:
@@ -257,7 +418,7 @@ def local_run(args, settings: Settings) -> int:
         vendor=args.vendor,
         product=args.product,
         keep=args.keep,
-        max_attempts=args.max_attempts,
+        max_attempts=settings.max_attempts,
         stages=tuple(args.stages.split(",")),
         runs_dir=settings.runs_dir,
         caps=caps,

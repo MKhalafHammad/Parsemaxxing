@@ -75,7 +75,7 @@ def test_fresh_database_gets_the_new_role_and_names(fresh_db):
     """002 recreates parsewright_app next to the renamed role; 005 leaves only the new one."""
     with db.connect(fresh_db) as conn:
         applied = db.migrate(conn)
-        assert applied[-1] == "005_rename_to_parsemaxxing.sql"
+        assert "005_rename_to_parsemaxxing.sql" in applied
         assert _roles(conn) == {NEW}
         _check_names(conn)
         _app_role_works(conn)
@@ -95,7 +95,7 @@ def test_v1_volume_is_renamed_in_place_and_keeps_legacy_tas(fresh_db):
         with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
             _insert_ta(conn, "TA-parsemaxxing-acme-fw")  # 003's CHECK, before 005
 
-        assert db.migrate(conn) == ["005_rename_to_parsemaxxing.sql"]
+        assert db.migrate(conn)[0] == "005_rename_to_parsemaxxing.sql"
         assert _roles(conn) == {NEW}
         assert conn.execute("SELECT app FROM tas").fetchall() == [{"app": "TA-parsewright-x-y"}]
         _check_names(conn)

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ActorAvatar, ActorName } from "@/components/actors/actor";
 import { NewRunSheet } from "@/components/board/new-run-sheet";
 import { Button } from "@/components/ui/button";
+import { ErrorText } from "@/components/ui/error-text";
 import { StatusBadge } from "@/components/ui/status";
 import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/table";
 import { api, type Job, type LedgerEvent, type TA } from "@/lib/api";
@@ -26,7 +27,7 @@ export default function Home() {
   const [ledgers, setLedgers] = useState<Record<string, Ledger>>({});
   const known = useRef<Record<string, Ledger>>({});
   const busy = useRef(false); // one polling round at a time
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | Error>("");
   const [message, setMessage] = useState("");
   const [sheet, setSheet] = useState(false);
 
@@ -60,7 +61,7 @@ export default function Home() {
         setError("");
         await follow(list);
       })
-      .catch((e: Error) => setError(e.message))
+      .catch((e: Error) => setError(e))
       .finally(() => {
         busy.current = false;
       });
@@ -96,7 +97,7 @@ export default function Home() {
       </p>
       {error && (
         <p role="alert" className="text-sm text-bad">
-          {error}
+          <ErrorText error={error} />
         </p>
       )}
 

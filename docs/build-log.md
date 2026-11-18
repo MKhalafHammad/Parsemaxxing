@@ -510,3 +510,18 @@ One entry per completed phase, appended at the end of the phase (see CLAUDE.md, 
 **Cut or deferred**
 - Approval was run through the engine API, the same endpoint the UI's Approve button uses; the UI was checked by HTTP status only, not in a browser, on the VM.
 - Pinning images by digest stays open (threat model R12).
+
+## 2026-11-18 — Phase 12: Hardened runtime, settings store and vault (in review)
+
+**Done**
+- Docker: separate networks (Splunk reaches nothing but a TCP relay to its port 8089), PostgreSQL published only with the `cli` profile, Docker secrets for the KEK and database passwords (`make secrets`), limits, `tmpfs` with `noexec`, healthchecks, an optional `https` profile (Caddy, HSTS). Supply chain: every image pinned by digest, `engine/requirements.lock` installed with `--require-hashes`, CycloneDX SBOM and a Trivy gate in CI (threat model R12 closed).
+- Settings service (`settings/`) and vault (`secrets/`, AES-256-GCM envelope encryption, `rotate-kek`); `config.py` is the only module that reads `os.environ`; `parsemaxxing settings import-env` moves a v1 `.env` into settings and the vault; `LLM_API_KEY` and `SPLUNK_*_TOKEN`, when set, win over the vault. `rotate-kek` runs as the app role; a KEK is adopted only by a vault with no secrets; the `migrate` service no longer gets the KEK.
+- Ledger hash chain with `parsemaxxing ledger verify` and `ledger head` (an anchor for `--expect-head`); encrypted backups (`make backup` / `make restore`, `parsemaxxing backup` / `restore`) with a checksum and ledger-head file beside each (restore refuses a missing or mismatched one), 30-day pruning, a minimal environment for `pg_dump`, `pg_restore` and `age`, and a round-trip job in CI.
+- API errors in one envelope with a request id; the web UI reads it. Error logs carry only the exception type and the request id; request bodies refuse unknown fields; URL settings refuse a user name or password. `make up` refuses a non-loopback `HTTPS_BIND` without `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes` and only warns when `LLM_API_KEY` is missing from `.env`.
+
+**Test results**
+- pytest on a host without PostgreSQL: 553 passed, 127 skipped (the database tests skip without PostgreSQL; CI runs them). Playwright, `make security`, the `images` and `restore-test` CI jobs: not re-run for this entry; see the pull request's CI.
+
+**Cut or deferred**
+- Per-job settings snapshots (the snapshot function exists; settings are read at process start), the wizard listing removable `.env` keys (Phase 15), the package store in backups (Phase 17b), the `pgvector/pgvector` image switch (Phase 20; the collation change needs a REINDEX plan), `make relay-test` (with the relay), TLS verification by default to Splunk (R2, still off), the R11 dev-dependency update.
+- New residual risks R17 to R22: Splunk container keeps `sudo`, Caddy runs as root with two capabilities, Debian packages not pinned by version, no external anchor for the ledger chain, an empty vault adopts the first KEK, three base images under 14 days old.

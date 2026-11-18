@@ -4,6 +4,7 @@ Every query is parameterised. Every state change is `UPDATE ... WHERE status = <
 with the row count checked, so a replayed or racing request changes nothing.
 """
 
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -25,6 +26,60 @@ FREE_SOURCE = (*FREE_CONTENT, "done")
 # Advisory lock keys (cluster-wide): Splunk writes, and a pool of LLM slots.
 SPLUNK_WRITE_LOCK = 7001
 LLM_SLOT_BASE = 7100
+
+
+GENESIS = "0" * 64  # prev_hash of the first ledger row (migration 006, section 5)
+
+
+def ledger_head(conn: psycopg.Connection) -> str:
+    """The newest ledger row as `<id>:<hash>` (an anchor for `ledger verify --expect-head`);
+    `-1:<GENESIS>` for an empty ledger."""
+    row = conn.execute("SELECT id, hash FROM ledger ORDER BY id DESC LIMIT 1").fetchone()
+    return f"{row['id']}:{row['hash']}" if row else f"-1:{GENESIS}"
+
+
+HEAD = re.compile(r"(-1|\d{1,19}):([0-9a-f]{64})")
+
+
+def verify_ledger(
+    conn: psycopg.Connection, batch: int = 5000, cap: int = 100, expect_head: str | None = None
+) -> dict:
+    """Walk the ledger hash chain in id order. A row whose hash does not match its content was
+    edited (or its id changed: a reorder); a row whose prev_hash is not the previous row's hash
+    follows a deleted, inserted or moved row. Returns {"rows", "head", "problems"} (at most
+    `cap` problems). A deleted tail is detected only against a head recorded earlier: pass it
+    as `expect_head` (`<id>:<hash>` from `ledger_head`), which must still be in the chain."""
+    rows, last, problems = 0, GENESIS, []
+    if expect_head is not None:
+        m = HEAD.fullmatch(expect_head)
+        if not m:
+            raise ValueError("the expected head is <id>:<64 hex hash> (from `ledger head`)")
+        anchor_id, anchor_hash = int(m[1]), m[2]
+        if anchor_id >= 0:  # -1 anchors an empty ledger: nothing to find
+            row = conn.execute("SELECT hash FROM ledger WHERE id = %s", (anchor_id,)).fetchone()
+            if row is None:
+                problems.append({"id": anchor_id, "problem": "the expected head row is gone"})
+            elif row["hash"] != anchor_hash:
+                problems.append({"id": anchor_id, "problem": "the expected head row changed"})
+    after = -1
+    while True:
+        page = conn.execute(
+            "SELECT id, prev_hash, hash,"
+            " ledger_row_hash(prev_hash, id, job_id, at, event, data) AS expected"
+            " FROM ledger WHERE id > %s ORDER BY id LIMIT %s",
+            (after, batch),
+        ).fetchall()
+        if not page:
+            return {"rows": rows, "head": {"id": after, "hash": last}, "problems": problems}
+        for r in page:
+            if r["hash"] != r["expected"]:
+                problems.append({"id": r["id"], "problem": "content does not match its hash"})
+            if r["prev_hash"] != last:
+                problems.append(
+                    {"id": r["id"], "problem": "chain broken before this row (removed or moved)"}
+                )
+            rows, last, after = rows + 1, r["hash"], r["id"]
+        del problems[cap:]
 
 
 class LostLease(RuntimeError):
@@ -211,6 +266,7 @@ class Store:
     # --- ledger ------------------------------------------------------------------------
 
     def event(self, job: str, event: str, data: dict | None = None) -> None:
+        """Append a ledger row; its id, prev_hash and hash are set by the chain trigger."""
         self.conn.execute(
             "INSERT INTO ledger (job_id, event, data) VALUES (%s, %s, %s)",
             (job, event, Jsonb(data or {})),

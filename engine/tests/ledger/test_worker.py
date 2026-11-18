@@ -11,15 +11,16 @@ from parsemaxxing.orchestrator.run import RunAborted
 
 
 @pytest.fixture
-def env(pg, pg_dsn, tmp_path, monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+def env(pg, pg_dsn, tmp_path):
     work = tmp_path / "in"
     work.mkdir()
     for n in ("acme_vpn.json", "acme_vpn.manifest.json"):
         shutil.copy(FIXTURES / n, work / n)
     pkgs = tmp_path / "packages"
     pkgs.mkdir(mode=0o755)
-    s = dataclasses.replace(settings(tmp_path), packages_dir=pkgs, runs_dir=tmp_path / "runs")
+    s = dataclasses.replace(
+        settings(tmp_path), packages_dir=pkgs, runs_dir=tmp_path / "runs", dsn=pg_dsn
+    )
     return pg, s, work / "acme_vpn.json"
 
 
@@ -142,3 +143,13 @@ def test_log_events_in_the_ledger_carry_structured_fields(env, tmp_path, manifes
         "kind": "info",
         "detail": {},
     }
+
+
+def test_daily_budget_and_attempts_come_from_settings(env, tmp_path):
+    pg, s, sample = env
+    pg.enqueue("bud00001", "acme:vpn", "f" * 64, str(sample), {"auto_approve": True})
+    pg.add_tokens("bud00001", 1_500)
+    tight = dataclasses.replace(s, daily_tokens=1_000, max_attempts=1)
+    w = make_worker(tight, "wb", FakeSplunk([]), fake_llm(tmp_path, []))
+    assert w.daily_tokens == 1_000 and w.once() is False  # budget reached: nothing claimed
+    assert pg.get("bud00001")["status"] == "queued"

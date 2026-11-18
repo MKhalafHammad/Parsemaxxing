@@ -7,7 +7,8 @@
 - A job waiting for profile review is released; the worker takes the next one.
 - A parser update job (form "update_of") runs the update flow against the TA registry.
 - Splunk writes run under one cluster-wide lock; model calls share a fixed number of slots;
-  the daily token budget and the kill switch stop new work and new model calls.
+  the daily token budget and the kill switch stop new work and new model calls. Slots, budget
+  and attempts come from the `run` settings group (through `config.Settings`).
 """
 
 import threading
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from parsemaxxing.agents.llm import LLMClient
 from parsemaxxing.agents.profiler import clean_name
-from parsemaxxing.config import Settings, database_url
+from parsemaxxing.config import Settings
 from parsemaxxing.ledger import store as db
 from parsemaxxing.orchestrator import events, promote
 from parsemaxxing.orchestrator.caps import IngestCaps
@@ -25,8 +26,8 @@ from parsemaxxing.orchestrator.run import STAGES, RunAborted, run
 from parsemaxxing.orchestrator.update import load_production, run_update
 from parsemaxxing.tools.splunk_client import SplunkClient
 
+# Not a setting: the heartbeat must stay well inside store.LEASE_S.
 HEARTBEAT_S = 30
-LLM_SLOTS = 2
 
 
 class Worker:
@@ -37,18 +38,17 @@ class Worker:
         out: Callable[[str], None] = print,
         splunk: SplunkClient | None = None,
         llm_factory: Callable[[], LLMClient] | None = None,
-        daily_tokens: int = 2_000_000,
     ):
         self.settings, self.id, self.out = settings, worker_id, out
-        self.conn = db.connect(database_url())
+        self.conn = db.connect(settings.dsn)
         self.store = db.Store(self.conn)
         self.splunk = splunk or SplunkClient(settings)
         self.llm_factory = llm_factory or (lambda: LLMClient(settings))
-        self.daily_tokens = daily_tokens
+        self.daily_tokens = settings.daily_tokens
         self.stages = STAGES
         # Separate connections: the heartbeat thread and model-call slots must not share the
         # main connection's transactions.
-        self.side = db.Store(db.connect(database_url()))
+        self.side = db.Store(db.connect(settings.dsn))
 
     # --- loop --------------------------------------------------------------------------
 
@@ -85,7 +85,7 @@ class Worker:
         lost: dict[str, str] = {}
         done = threading.Event()
 
-        conn = db.connect(database_url())  # the thread's own connection
+        conn = db.connect(self.settings.dsn)  # the thread's own connection
 
         def beat() -> None:
             beats = db.Store(conn)
@@ -141,6 +141,7 @@ class Worker:
             ),
             record=lambda j, pkg, **kw: promote.record_passed_run(records, j, pkg, **kw),
             stages=self.stages,
+            max_attempts=self.settings.max_attempts,
         )
         if result.status == "profile_review":
             self.store.transition(jid, "running", "profile_review", worker=self.id, worker_id=None)
@@ -176,6 +177,7 @@ class Worker:
                 lost.get("reason") or ("kill switch on" if self.side.kill_switch() else None)
             ),
             record=lambda j, pkg, **kw: promote.record_passed_run(records, j, pkg, **kw),
+            max_attempts=self.settings.max_attempts,
         )
         if result.status == "profile_review":  # the new samples need a stated timezone
             self.store.transition(jid, "running", "profile_review", worker=self.id, worker_id=None)
@@ -192,7 +194,7 @@ class Worker:
             raise RunAborted("kill switch on")
         if self.side.tokens_today() >= self.daily_tokens:
             raise RunAborted("daily token budget reached")
-        with self.side.llm_slot(LLM_SLOTS):
+        with self.side.llm_slot(self.settings.llm_slots):
             if self.side.kill_switch():  # switched on while this call waited for a slot (L6)
                 raise RunAborted("kill switch on")
             yield

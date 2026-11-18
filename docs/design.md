@@ -583,7 +583,7 @@ An AI with write access to Splunk is a risk, so every agent output passes a dete
 | Log text rendered only as escaped text; highlights built as React elements | XSS from `<script>` in log lines in the raw vs parsed view | Built |
 | Login; approve and promote need an approver role | Anyone reaching the API approving changes | Planned (localhost only today, R1; [7.3](#73-authentication-and-authorization), Phase 13) |
 | Approval needs a second confirmation; high-risk changes (routing on shared stanzas) flagged | Risky approvals looking routine | Built (routing flag planned) |
-| Pinned dependencies with hashes, images by digest | Supply-chain drift in the public repo | Planned (R12; [7.7](#77-security-baseline), Phase 12) |
+| Pinned dependencies with hashes, images by digest | Supply-chain drift in the public repo | Built (Phase 12, R12 closed; CIM package checksum planned, Phase 17c) |
 
 ### Splunk service accounts (token auth)
 
@@ -620,7 +620,7 @@ Plain Python, no agent framework: the flow is fixed and small, and readable code
 | LDAP | `ldap3` | Pure-Python client with LDAPS, StartTLS and RFC 4515 filter escaping ([7.4](#74-ldap)) | Planned (Phase 14) |
 | Password hashing | `argon2-cffi` | Argon2id, the OWASP-recommended algorithm ([7.3](#73-authentication-and-authorization)) | Planned (Phase 13) |
 | MFA | `pyotp` | TOTP per RFC 6238 ([7.3](#73-authentication-and-authorization)) | Planned (Phase 13) |
-| Encryption | `cryptography` | AES-256-GCM envelope encryption for the vault; no custom crypto ([7.5](#75-settings-from-the-ui-and-the-secrets-vault)) | Planned (Phase 12) |
+| Encryption | `cryptography` | AES-256-GCM envelope encryption for the vault; no custom crypto ([7.5](#75-settings-from-the-ui-and-the-secrets-vault)) | Built (Phase 12) |
 | LLM client (Anthropic) | `anthropic` SDK | Adapter for the `anthropic` provider kind; the `openai` SDK stays for OpenAI-compatible and Azure ([7.6](#76-llm-providers-and-per-agent-models)) | Planned (Phase 16) |
 | Vector search | `pgvector` extension (`pgvector/pgvector` image pinned by digest) | Retrieval inside the existing PostgreSQL, no extra service ([7.12](#712-knowledge-base-rag)) | Planned (Phase 20) |
 | Embeddings | `fastembed` (ONNX, small English model, files pinned by SHA-256) | Local embeddings, so nothing leaves the network and offline servers work ([7.12](#712-knowledge-base-rag)) | Planned (Phase 20; model choice is Q19) |
@@ -628,7 +628,11 @@ Plain Python, no agent framework: the flow is fixed and small, and readable code
 | Charts | To be chosen by `frontend`, open question Q19 | Accessible charts in the repo's colour tokens; licence must allow commercial use ([7.8](#78-analytics)) | Planned (Phase 19; choice in Phase 11) |
 | XML parsing | `defusedxml` | No external entities and no entity expansion in any XML the engine parses ([7.17](#717-log-formats)) | Planned (Phase 17c) |
 | PDF text extraction | A maintained, pinned library, licence checked, chosen in Phase 20 | Imported Splunk manual PDFs ([7.12](#712-knowledge-base-rag)) | Planned (Phase 20) |
-| Backup encryption | `age` | Encrypted `pg_dump` with a public key from settings ([7.5](#75-settings-from-the-ui-and-the-secrets-vault)) | Planned (Phase 12) |
+| Backup encryption | `age` | Encrypted `pg_dump` with a public key from settings ([7.5](#75-settings-from-the-ui-and-the-secrets-vault)) | Built (Phase 12; Debian package in the engine image) |
+| HTTPS reverse proxy | Caddy (`caddy` image pinned by digest), optional `https` compose profile | TLS with an internal CA or an admin certificate, and HSTS, in front of the web UI with a few lines of config ([7.13](#713-ux-navigation-and-the-platform-ui)) | Built (Phase 12) |
+| Image scan | Trivy (`aquasecurity/trivy` image pinned by digest) | Fails CI on fixable HIGH and CRITICAL findings; reviewed exceptions in `.trivyignore` ([7.7](#77-security-baseline), A03) | Built (Phase 12) |
+| SBOM | Syft (`anchore/syft` image pinned by digest) | CycloneDX SBOM per built image, kept as a CI artifact ([7.7](#77-security-baseline), A03) | Built (Phase 12) |
+| Docker TCP relay | `scripts/tcp_forward.py`, standard library only, in the pinned `python` image | Lets the engine reach Splunk's port 8089 (`splunk-api`) and the host CLI reach PostgreSQL (`cli` profile) without Splunk sharing a network with the engine or PostgreSQL being on a published network ([7.13](#713-ux-navigation-and-the-platform-ui)) | Built (Phase 12) |
 
 ### Platform and UI
 
@@ -697,15 +701,15 @@ Each was tested against the real Meta Model API and Splunk; details and evidence
 | [7.2 Deployment pipeline](#72-deployment-pipeline-build-and-deploy-are-separate) | 18 | Planned |
 | [7.3 Authentication and authorization](#73-authentication-and-authorization) | 13 | Planned |
 | [7.4 LDAP](#74-ldap) | 14 | Planned |
-| [7.5 Settings and the secrets vault](#75-settings-from-the-ui-and-the-secrets-vault) | 12 (environment and client scopes with 17) | Planned |
+| [7.5 Settings and the secrets vault](#75-settings-from-the-ui-and-the-secrets-vault) | 12 (environment and client scopes with 17) | Partly built (Phase 12: settings service, vault, v1 import, database backups; UI, per-job snapshots, expiry tracking and package-store backups planned) |
 | [7.6 LLM providers and per-agent models](#76-llm-providers-and-per-agent-models) | 16 | Planned |
-| [7.7 Security baseline](#77-security-baseline) | 11 (document), every phase, verified in 24 | Planned |
+| [7.7 Security baseline](#77-security-baseline) | 11 (document), every phase, verified in 24 | Partly built (Phase 12 rows of A02, A03, A04, A08, A10; see the baseline doc) |
 | [7.8 Analytics](#78-analytics) | 19 | Planned |
 | [7.9 Discovery](#79-discovery) | 21 | Planned |
 | [7.10 Drift pipeline and masking](#710-drift-pipeline-multi-environment-and-masking) | Masking 21, drift 22 | Planned |
 | [7.11 Mixed-feed routing](#711-mixed-feed-routing-topology-aware) | 23 | Planned |
 | [7.12 Knowledge base (RAG)](#712-knowledge-base-rag) | 20 (spec key table in 17c) | Planned |
-| [7.13 UX, navigation and the platform UI](#713-ux-navigation-and-the-platform-ui) | 15 (Docker part 12, Add-ons screens 17b, environment screens 17) | Planned |
+| [7.13 UX, navigation and the platform UI](#713-ux-navigation-and-the-platform-ui) | 15 (Docker part 12, Add-ons screens 17b, environment screens 17) | Docker part built (Phase 12); the rest planned |
 | [7.14 Data onboarding governance](#714-data-onboarding-governance-design-only) | 25 (design only, no code) | Planned |
 | [7.15 Add-on version control](#715-add-on-version-control) | 17b (per environment once 18 lands) | Planned |
 | [7.16 CIM data models and data model selection](#716-cim-data-models-from-each-environment-and-data-model-selection) | 17c | Planned |
@@ -1065,7 +1069,7 @@ Produces a deployment bundle: the `.tgz`, a `SHA256SUMS` file, and a numbered ru
 
 ## 7.5 Settings from the UI, and the secrets vault
 
-**Status: planned (Phase 12;** environment and client scopes with Phase 17**).**
+**Status: partly built (Phase 12).** Built: the settings service (`engine/parsemaxxing/settings/`: groups, versions, history, snapshots by hash, environment overrides read-only, export and import with a diff, explicit scopes), the vault (`engine/parsemaxxing/secrets/`, `rotate-kek`), the bootstrap slim-down with `parsemaxxing settings import-env`, and encrypted database backups with a restore tested in CI. Planned: settings and vault screens and the wizard listing removable `.env` keys (Phase 15); job snapshots wired into each job (today settings are read at process start); environments and clients beyond the one v1 environment `lab` (Phase 17); expiry tracking (Phase 17); relay SSH keys (Phase 18); the package store in backups (Phase 17b).
 
 ### Bootstrap `.env`
 
@@ -1075,7 +1079,7 @@ Only what is needed to start: PostgreSQL connection values, the path of the KEK 
 
 - Grouped; each group is a Pydantic model with types, bounds and validation messages; versioned; every change recorded in `settings_history` with who, when, old and new value (secrets: only "changed").
 - New jobs read a settings snapshot at start and record its hash; running jobs never see a change mid-run.
-- **Environment variables still work as overrides** for teams that manage config as code: a setting whose variable is present is shown as "managed by environment" and read-only in the UI.
+- **Environment variables still work as overrides** for teams that manage config as code: a setting whose variable is present is shown as "managed by environment" and read-only in the UI. This includes the secret fields with a v1 variable (`LLM_API_KEY`, `SPLUNK_SEARCH_TOKEN`, `SPLUNK_DEPLOY_TOKEN`): set and not empty, the variable wins over the vault value at runtime; the settings service never reads the value, it only reports the source. URL settings refuse a user name or password in the URL.
 - **Export and import** of non-secret settings as JSON (admin), validated before applying, shown as a diff, recorded in history.
 - **Migration from v1:** on first start of v2, known keys from `.env` are imported once (secrets into the vault), and the setup wizard lists what can now be removed from `.env`.
 
@@ -1099,14 +1103,14 @@ Only what is needed to start: PostgreSQL connection values, the path of the KEK 
 ### Vault
 
 - AES-256-GCM via `cryptography` only (no custom crypto). Each secret has its own random data key, wrapped by the KEK; 96-bit random nonces; the AAD binds secret id, purpose and version, so a ciphertext cannot be moved to another row.
-- The KEK is 32 random bytes in `secrets/pmx_kek` on the host (created by `make setup`, mode 0400, git-ignored), mounted as a Docker secret into the engine only, never the web container. `parsemaxxing secrets rotate-kek` rewraps every data key.
+- The KEK is 32 random bytes in `secrets/pmx_kek` on the host (created by `make setup`, mode 0400, git-ignored), mounted as a Docker secret into the engine only, never the web container or the `migrate` service. `parsemaxxing secrets rotate-kek` rewraps every data key and runs as the app role (row locks, no table lock). The vault records the fingerprint of the first KEK it is used with and adopts a KEK only while it holds no secrets; afterwards a different KEK is refused.
 - Decryption happens only at the moment of use, inside the engine. Values are never returned by the API (write-only fields show "set" and the last update time); every model and dataclass that can hold one redacts it in `repr`.
 - **Inventory:** LLM keys, Splunk tokens per node, relay SSH private keys, LDAP bind password, node CA bundles (not secret but integrity-protected), webhook tokens, per-job sample data keys, masking keys.
 - **Expiry tracking:** Splunk tokens and API tokens show days left; analytics and the environment health page warn at 14 and 3 days.
 
 ### Backups
 
-`parsemaxxing backup` covers the database and the add-on package store (7.15). It writes an encrypted dump (`pg_dump` piped to `age` with a public key from settings). Restore is documented and tested in CI. `docs/setup.md` states in bold that losing the KEK loses every secret, and how to back it up. Backup retention should not exceed 30 days (7.19).
+`parsemaxxing backup` covers the database and the add-on package store (7.15; the package store is planned, Phase 17b). It writes an encrypted dump (`pg_dump` piped to `age` with a public key from settings) and a `<file>.sha256` beside it: line 1 in `sha256sum` format, line 2 `ledger-head <id>:<hash>`. Restore refuses a missing or mismatched sidecar and then runs `ledger verify` against the recorded head (the shell `make restore` prints the head for a manual check). Both backup commands delete their own backups older than 30 days; child processes get a minimal environment. Restore is documented and tested in CI. `docs/setup.md` states in bold that losing the KEK loses every secret, and how to back it up. Backup retention should not exceed 30 days (7.19).
 
 ## 7.6 LLM providers and per-agent models
 
@@ -1124,7 +1128,7 @@ Only what is needed to start: PostgreSQL connection values, the path of the KEK 
 
 ## 7.7 Security baseline
 
-**Status: planned.** `docs/security-baseline.md` (written in Phase 11) holds one table per standard: id, risk, how Parsemaxxing addresses it, where in the code, which test proves it, status. The `appsec` agent keeps it current; every phase updates the rows it touches; Phase 24 verifies every row.
+**Status: partly built.** Phase 12 built its share of A02 (security headers, network separation, `https` profile), A03 (images by digest, hashed Python lock, SBOM, Trivy gate; CIM checksum planned in 17c), A04 (vault), A08 (ledger hash chain, `ledger verify`, and `ledger head` / `--expect-head` as an anchor that backups record too; the UI integrity badge is planned) and A10 (one error envelope with a request id). The rest is planned in the phases listed. `docs/security-baseline.md` (written in Phase 11) holds one table per standard: id, risk, how Parsemaxxing addresses it, where in the code, which test proves it, status. The `appsec` agent keeps it current; every phase updates the rows it touches; Phase 24 verifies every row.
 
 **OWASP Top 10:2025**
 
@@ -1300,7 +1304,7 @@ As in the v1 [Mixed feeds and sourcetype assignment](#mixed-feeds-and-sourcetype
 
 ## 7.13 UX, navigation and the platform UI
 
-**Status: planned (Phase 15).** The Docker part is Phase 12; the Add-ons screens Phase 17b; the environment screens Phase 17. The `ux` agent writes the specs first in `docs/ux/` (information architecture, flows, screens, copy).
+**Status: planned (Phase 15).** The Docker part is built (Phase 12); the Add-ons screens Phase 17b; the environment screens Phase 17. The `ux` agent writes the specs first in `docs/ux/` (information architecture, flows, screens, copy).
 
 - **App shell:** collapsible left sidebar; top bar with a customer → environment context switcher, global search over runs, TAs and environments, a user menu (profile, MFA, API tokens, sign out), and notifications ("Needs you": profile reviews, approvals, failed deployments, drift jobs, expiring tokens). The context switcher filters every list, chart and action; the selected environment always shows in the top bar and in every deploy, revert and approve dialog.
 - **Navigation:** Overview · Runs · Discovery · Add-ons · Deployments · Drift · Environments · Knowledge · Analytics · Settings (General, LLM providers and agents, Budgets, Authentication and LDAP, Users, API tokens, Data policies, Security health, Audit log, About).
@@ -1317,6 +1321,8 @@ As in the v1 [Mixed feeds and sourcetype assignment](#mixed-feeds-and-sourcetype
 - **Keep what works:** actor identities, phase rail, row diffs, raw vs parsed, the editor-style conf view, the hash confirmation, rehomed inside the shell.
 
 ### Docker (Phase 12)
+
+**Status: built (Phase 12).** As built, the networks are `edge`, `app`, `data`, `splunk_api`, `splunk` and `egress`; the engine reaches Splunk only through a TCP relay (`splunk-api`), and the `https` profile uses Caddy. The Splunk container keeps `sudo` and so runs without `no-new-privileges`, `cap_drop` and a read-only root; Caddy runs as root with two capabilities (threat model R17, R18).
 
 Separate Docker networks (`edge`, `app`, `data`, `splunk`); PostgreSQL not published by default (a `cli` compose profile publishes it on 127.0.0.1); Docker secrets for the KEK and database passwords; CPU, memory and pids limits; `tmpfs` with `noexec`; healthchecks for every service; an optional `https` profile with a reverse proxy (provided certificate or an internal CA) and HSTS; plus the existing non-root, read-only, `cap_drop: ALL`, `no-new-privileges`, no Docker socket.
 

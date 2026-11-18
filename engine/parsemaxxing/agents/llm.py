@@ -88,9 +88,10 @@ class LLMClient:
         # on_usage records the tokens of each call.
         self.guard: Callable[[], AbstractContextManager] = nullcontext
         self.on_usage: Callable[[int], None] = lambda n: None
-        self._client = client or openai.OpenAI(
-            api_key=settings.llm_api_key, base_url=settings.llm_base_url, timeout=timeout
-        )
+        if client is None:  # the key is opened from the vault only to build the client
+            with settings.secrets.use("llm_api_key") as key:
+                client = openai.OpenAI(api_key=key, base_url=settings.llm_base_url, timeout=timeout)
+        self._client = client
 
     def structured[T: BaseModel](
         self, system: str, user: str, schema: type[T], max_tokens: int = DEFAULT_MAX_TOKENS

@@ -1,0 +1,17 @@
+# The https profile's reverse proxy (docker-compose.yml service "https"). Values come from the
+# service's environment: PMX_PUBLIC_HOST (the host name the browser uses) and PMX_TLS ("internal"
+# or "/certs/<cert>.pem /certs/<key>.pem").
+{
+	admin off
+	auto_https disable_redirects
+	https_port 8443
+}
+
+{$PMX_PUBLIC_HOST}:8443 {
+	tls {$PMX_TLS}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy web:3000
+}

@@ -1,5 +1,6 @@
 """Create .env from .env.example if missing, and replace every placeholder password with a random
 one. Never prints a secret; reports only which keys it generated and which still need a value.
+Exit code 2: everything written, but LLM_API_KEY is still a placeholder (`make setup` goes on).
 
 Usage: python3 scripts/init_env.py
 """
@@ -58,7 +59,7 @@ def main() -> int:
             "LLM_API_KEY is still a placeholder: set your Meta Model API key in .env",
             file=sys.stderr,
         )
-        return 1
+        return 2
     return 0
 
 

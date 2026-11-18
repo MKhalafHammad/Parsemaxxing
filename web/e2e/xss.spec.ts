@@ -178,3 +178,15 @@ test("a run without a manifest shows the agents' decisions as text and asks for 
   await page.getByRole("button", { name: "Confirm profile" }).click();
   await expect.poll(() => posted).toBe(true);
 });
+
+test("an API error message and request id render as text", async ({ page }) => {
+  const dialogs = watchDialogs(page);
+  await page.route("**/api/engine/runs/e2e00001", (r) =>
+    r.fulfill({ status: 404, json: { error: { code: "not_found", message: `no run ${XSS}`, request_id: XSS }, detail: "x" } }),
+  );
+  await page.route("**/api/engine/runs/e2e00001/stream", (r) => r.fulfill({ status: 404, body: "" }));
+  await page.goto("/runs/e2e00001");
+  await expect(page.getByRole("main").getByRole("alert")).toContainText(`no run ${XSS}`);
+  await expect(page.getByRole("main").getByRole("alert")).toContainText(`Request id ${XSS}`);
+  await nothingInjected(page, dialogs);
+});
