@@ -7,20 +7,22 @@ from types import SimpleNamespace
 import pytest
 
 from parsemaxxing.agents.llm import LLMClient
-from parsemaxxing.config import Settings
+from parsemaxxing.config import Secrets, Settings
 
 FIXTURES = Path(__file__).parents[1] / "parsemaxxing" / "generator" / "fixtures"
 
 
 def settings(tmp_path: Path, ceiling: int = 100_000) -> Settings:
     return Settings(
-        llm_api_key="test-key",
         llm_base_url="https://llm.example.com/v1",
         llm_model="test-model",
         splunk_host="splunk.example.com",
         splunk_port=8089,
-        splunk_search_token="search-token",
-        splunk_deploy_token="deploy-token",
+        secrets=Secrets.static(
+            llm_api_key="test-key",
+            splunk_search_token="search-token",
+            splunk_deploy_token="deploy-token",
+        ),
         packages_dir=tmp_path,
         test_index="pmx_test",
         run_token_ceiling=ceiling,

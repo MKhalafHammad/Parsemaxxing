@@ -68,11 +68,17 @@ def connect(settings: Settings, token: str, timeout: int = 60) -> client.Service
     )
 
 
+def connect_with(settings: Settings, secret: str, timeout: int = 60) -> client.Service:
+    """Connect with a token opened from the vault (or the v1 variable) only for this call."""
+    with settings.secrets.use(secret) as token:
+        return connect(settings, token, timeout)
+
+
 class SplunkClient:
     def __init__(self, settings: Settings, search: Any = None, deploy: Any = None):
         self.packages = settings.packages_dir
-        self.search = search or connect(settings, settings.splunk_search_token)
-        self.deploy = deploy or connect(settings, settings.splunk_deploy_token)
+        self.search = search or connect_with(settings, "splunk_search_token")
+        self.deploy = deploy or connect_with(settings, "splunk_deploy_token")
 
     # --- deploy token -------------------------------------------------------------------
 
