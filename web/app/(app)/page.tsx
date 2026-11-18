@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ActorAvatar, ActorName } from "@/components/actors/actor";
+import { AdminOnly, useSession } from "@/components/auth/session";
 import { NewRunSheet } from "@/components/board/new-run-sheet";
 import { Button } from "@/components/ui/button";
 import { ErrorText } from "@/components/ui/error-text";
@@ -13,6 +14,7 @@ import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/table";
 import { api, type Job, type LedgerEvent, type TA } from "@/lib/api";
 import { STAGE_LABEL, toEntries, type Entry } from "@/lib/events";
 import { describeNow } from "@/lib/phases";
+import { when } from "@/lib/utils";
 
 const FINAL = new Set(["done", "rejected", "stage_failed", "error", "smoke_failed", "promotion_failed"]);
 const NEEDS_YOU = new Set(["profile_review", "awaiting_approval"]);
@@ -22,6 +24,7 @@ const KEEP = 2000; // rows kept per job (older runs are read in order, so not ju
 type Ledger = { after: number; rows: LedgerEvent[]; entries: Entry[]; final: boolean };
 
 export default function Home() {
+  const { isAdmin } = useSession();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [tas, setTas] = useState<TA[]>([]);
   const [ledgers, setLedgers] = useState<Record<string, Ledger>>({});
@@ -88,9 +91,11 @@ export default function Home() {
           <h1 className="text-xl font-semibold">Runs</h1>
           <p className="text-sm text-muted">Updates every few seconds. Open a run to follow it live.</p>
         </div>
-        <Button onClick={() => setSheet(true)}>
-          <Plus aria-hidden className="h-4 w-4" /> New run
-        </Button>
+        <AdminOnly>
+          <Button onClick={() => setSheet(true)}>
+            <Plus aria-hidden className="h-4 w-4" /> New run
+          </Button>
+        </AdminOnly>
       </div>
       <p role="status" aria-live="polite" className="text-sm text-good empty:hidden">
         {message}
@@ -132,7 +137,7 @@ export default function Home() {
           All runs
         </h2>
         {jobs.length === 0 ? (
-          <p className="p-4 text-sm text-muted">No runs yet. Start one with “New run”.</p>
+          <p className="p-4 text-sm text-muted">{isAdmin ? "No runs yet. Start one with “New run”." : "No runs yet. An admin starts runs."}</p>
         ) : (
           <Table aria-label="Jobs">
             <THead>
@@ -174,7 +179,7 @@ export default function Home() {
                     <Td>
                       <StatusBadge status={j.status} />
                     </Td>
-                    <Td className="whitespace-nowrap text-[13px] text-subtle">{new Date(j.updated_at).toLocaleTimeString()}</Td>
+                    <Td className="whitespace-nowrap text-[13px] text-subtle">{when(j.updated_at)}</Td>
                   </Tr>
                 );
               })}

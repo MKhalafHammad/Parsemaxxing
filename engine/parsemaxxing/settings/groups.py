@@ -83,3 +83,19 @@ class BackupSettings(SettingsGroup):
     age_recipient: str | None = setting(
         None, env="PARSEMAXXING_BACKUP_RECIPIENT", pattern=r"^age1[02-9ac-hj-np-z]{58}$"
     )
+
+
+class AuthSettings(SettingsGroup):
+    """Local accounts, sessions and lockout (design 7.3). Platform scope only."""
+
+    GROUP = "auth"
+    VERSION = 1
+    require_mfa_admins: bool = setting(True)
+    idle_timeout_minutes: int = setting(30, ge=5, le=1440)
+    absolute_timeout_hours: int = setting(12, ge=1, le=168)
+    # Lockout: after `lockout_threshold` failures for one user name (or `ip_lockout_threshold`
+    # from one client IP), wait base * 2^(failures - threshold) seconds, at most the maximum.
+    lockout_threshold: int = setting(5, ge=3, le=20)
+    ip_lockout_threshold: int = setting(20, ge=5, le=1000)
+    lockout_base_seconds: int = setting(60, ge=1, le=3600)
+    lockout_max_seconds: int = setting(900, ge=60, le=86400)

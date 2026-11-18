@@ -24,6 +24,16 @@ API = os.environ.get("PARSEMAXXING_API", "http://127.0.0.1:8080")
 UI = os.environ.get("PARSEMAXXING_UI", "http://localhost:3000")
 
 
+def api_token() -> str:
+    """The engine needs a token since Phase 13; never printed."""
+    token = os.environ.get("PARSEMAXXING_API_TOKEN", "")
+    if not token:
+        raise SystemExit(
+            "set PARSEMAXXING_API_TOKEN to an admin API token (UI: Settings > API tokens)"
+        )
+    return token
+
+
 def fresh(folder: Path, mode: str) -> Path:
     synth.FIXTURES = (
         folder  # write into the temp folder, never over the committed fixtures
@@ -51,7 +61,11 @@ def fresh(folder: Path, mode: str) -> Path:
 
 
 def main(mode: str) -> int:
-    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsemaxxing": "1"})
+    c = httpx.Client(
+        base_url=API,
+        timeout=60,
+        headers={"X-Parsemaxxing": "1", "Authorization": f"Bearer {api_token()}"},
+    )
     with tempfile.TemporaryDirectory() as tmp:
         log = fresh(Path(tmp), mode)
         r = c.post(

@@ -39,6 +39,7 @@ Common to all Settings pages:
 - **Table:** name, user name, source (Local or LDAP), role, MFA (enrolled or not), last sign-in, status (Active, Locked, Disabled). Filters by source and role.
 - **Primary action:** Add user (local): name, user name, role, temporary password or invite link (shown once), "Require MFA at first sign-in".
 - **Row actions (admin):** Change role… (signs the user out everywhere, said in the dialog), Reset MFA…, Unlock, Disable user…, Sign out everywhere. LDAP users: role comes from groups, shown read-only with the group name.
+- **Viewer (exception to "every page read-only"):** the engine lists users to admins only (Phase 13), so viewers see Add user disabled with "Admin only" and, in place of the table, "Only admins can see the user list. Ask an admin to add or change a user." Owner may overrule.
 - **Acceptance:** an admin can't remove their own admin role if they are the last local admin ("Keep at least one local admin for break-glass access").
 
 ## API tokens (Phase 13 back end, Phase 15 screen)

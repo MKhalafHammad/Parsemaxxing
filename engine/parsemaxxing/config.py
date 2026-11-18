@@ -2,20 +2,22 @@
 
 Bootstrap values: the PostgreSQL connection (passwords also as `*_FILE` Docker secrets), the KEK
 file path, the filesystem layout (packages and runs folders), the API's allowed hosts and web
-origin, the log level, and the backup recipient override. Everything else is a runtime setting
-read through the settings service (`runtime()`), with secrets from the vault. The environment
+origin, the log level, the backup recipient override, and the CLI's API URL and token.
+Everything else is a runtime setting read through the settings service (`runtime()`), with
+secrets from the vault. The environment
 is passed to the settings service, where a variable named by a field overrides it read-only.
 A test (tests/test_bootstrap.py) fails if any other module reads os.environ.
 """
 
 import os
 import re
+import stat
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 ENV_KEYS = (
     # v1 runtime keys: still read as read-only overrides (secrets: transitional fallback) until
@@ -37,6 +39,8 @@ ENV_KEYS = (
     "PARSEMAXXING_KEK_FILE",
     "PARSEMAXXING_LOG_LEVEL",
     "PARSEMAXXING_BACKUP_RECIPIENT",
+    "PARSEMAXXING_TRUSTED_PROXIES",
+    "PARSEMAXXING_API_URL",  # the CLI's engine API (the token is never read from .env)
     "DATABASE_URL",
     "POSTGRES_HOST",
     "POSTGRES_PORT",
@@ -117,13 +121,86 @@ def log_level() -> str:
     return level
 
 
-def web_origin() -> str:
-    return os.environ.get("WEB_ORIGIN", "http://localhost:3000")
+def web_origins() -> list[str]:
+    """The browser origins the web UI is served from (CORS and the CSRF Origin check):
+    WEB_ORIGINS, a comma list, else the single WEB_ORIGIN. Each is scheme://host[:port]."""
+    raw = os.environ.get("WEB_ORIGINS") or os.environ.get("WEB_ORIGIN") or "http://localhost:3000"
+    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    for o in origins:
+        parts = urlsplit(o)
+        if (
+            parts.scheme not in ("http", "https")
+            or not parts.hostname
+            or "*" in o
+            or o != f"{parts.scheme}://{parts.netloc}"
+        ):
+            raise RuntimeError("WEB_ORIGINS: each origin is http(s)://host[:port], nothing more")
+    return origins
 
 
 def allowed_hosts() -> list[str]:
     hosts = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1,engine").split(",")
     return [h.strip() for h in hosts if h.strip()]
+
+
+def trusted_proxies() -> list[str]:
+    """Peers (IPs or CIDRs) whose X-Forwarded-For is believed for the client IP (the web
+    container). Empty: the TCP peer is the client."""
+    raw = os.environ.get("PARSEMAXXING_TRUSTED_PROXIES", "")
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+LOOPBACK_NAMES = ("127.0.0.1", "localhost", "::1", "engine")  # "engine": the compose network
+API_TOKEN = re.compile(r"pmxt_[A-Za-z0-9_-]{20,200}")
+
+
+def api_url() -> str:
+    """The engine API the CLI calls. Plain http only to this machine (or the compose network's
+    engine): elsewhere the bearer token would cross the network in clear."""
+    url = os.environ.get("PARSEMAXXING_API_URL", "http://127.0.0.1:8080").rstrip("/")
+    parts = urlsplit(url)
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.username is not None
+        or parts.path
+        or parts.query
+        or parts.fragment
+    ):
+        raise RuntimeError("PARSEMAXXING_API_URL must be http(s)://host[:port], nothing more")
+    if parts.scheme == "http" and parts.hostname not in LOOPBACK_NAMES:
+        raise RuntimeError("PARSEMAXXING_API_URL: use https for an engine on another host")
+    return url
+
+
+def api_token(token_file: Path | None = None) -> str:
+    """The CLI's API token: from `token_file` (mode 0600 or 0400, not a link) or
+    PARSEMAXXING_API_TOKEN. Never taken as a command-line value; never in an error message."""
+    if token_file is not None:
+        try:
+            fd = os.open(token_file, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as e:
+            raise RuntimeError(f"--token-file cannot be opened ({type(e).__name__})") from None
+        with os.fdopen(fd, encoding="utf-8") as f:
+            mode = os.fstat(f.fileno()).st_mode
+            if not stat.S_ISREG(mode) or stat.S_IMODE(mode) not in (0o600, 0o400):
+                raise RuntimeError("--token-file must be a regular file with mode 0600 or 0400")
+            token = f.read(1024).strip()
+    else:
+        token = os.environ.get("PARSEMAXXING_API_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError(
+            "no API token: set PARSEMAXXING_API_TOKEN or pass --token-file "
+            "(an admin creates one under Account, API tokens)"
+        )
+    if not API_TOKEN.fullmatch(token):
+        raise RuntimeError("the API token is not a pmxt_ token")
+    return token
+
+
+def runs_dir() -> Path:
+    """The engine's data volume (runs, uploads, the setup token)."""
+    return Path(os.environ.get("PARSEMAXXING_RUNS_DIR") or REPO / ".runs")
 
 
 def secret_env(name: str) -> str:
@@ -322,7 +399,7 @@ def runtime(local: bool = False) -> Settings:
         packages_dir=Path(_require("PARSEMAXXING_PACKAGES_DIR")),
         test_index=splunk.test_index,
         run_token_ceiling=llm.run_token_ceiling,
-        runs_dir=Path(os.environ.get("PARSEMAXXING_RUNS_DIR") or REPO / ".runs"),
+        runs_dir=runs_dir(),
         job_ingest_mb=ingest.job_ingest_mb,
         daily_ingest_mb=ingest.daily_ingest_mb,
         daily_tokens=runs.daily_token_budget,

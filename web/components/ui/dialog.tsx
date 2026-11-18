@@ -13,6 +13,7 @@ export function Dialog({
   description,
   sheet = false,
   role,
+  describedBy,
   children,
 }: {
   open: boolean;
@@ -21,6 +22,8 @@ export function Dialog({
   description?: string;
   sheet?: boolean;
   role?: "alertdialog";
+  /** The id of body text that describes the dialog, when there is no `description`. */
+  describedBy?: string;
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -38,7 +41,7 @@ export function Dialog({
       ref={ref}
       role={role}
       aria-labelledby="dlg-title"
-      aria-describedby={description ? "dlg-desc" : undefined}
+      aria-describedby={description ? "dlg-desc" : describedBy}
       onClose={onClose}
       onCancel={(e) => {
         e.preventDefault();

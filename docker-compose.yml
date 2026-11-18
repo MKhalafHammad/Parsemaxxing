@@ -182,9 +182,13 @@ services:
       PARSEMAXXING_TEST_INDEX: ${PARSEMAXXING_TEST_INDEX:-pmx_test}
       PARSEMAXXING_RUN_TOKEN_CEILING: ${PARSEMAXXING_RUN_TOKEN_CEILING:-300000}
       ALLOWED_HOSTS: localhost,127.0.0.1,engine
-      WEB_ORIGIN: http://localhost:${WEB_PORT:-3000}
+      # The browser origins allowed to send the session cookie; the same list as web's (anchor).
+      WEB_ORIGINS: &web-origins http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000},https://${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443},https://${PMX_PUBLIC_HOST:-localhost}
       SPLUNK_HOST: splunk
       SPLUNK_PORT: "8089"
+      # Only the web container's X-Forwarded-For names the client (per-IP lockout); the https
+      # proxy talks to web, never to the engine.
+      PARSEMAXXING_TRUSTED_PROXIES: 172.30.10.10
       LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL in .env}
       LLM_MODEL: ${LLM_MODEL:?set LLM_MODEL in .env}
       # Transitional fallback: used only while the vault has no value for them. After
@@ -208,7 +212,7 @@ services:
         limits: { cpus: "2", memory: 2g, pids: 512 }
     restart: unless-stopped
 
-  # No secret, no KEK, no database access: it reaches only the engine (app network).
+  # No KEK, no database access, only the proxy-hop secret: it reaches only the engine (app network).
   web:
     image: parsemaxxing-web:local
     build:
@@ -221,10 +225,16 @@ services:
       # The browser reaches the UI only by these names (DNS-rebinding guard, threat T8.5); the
       # last two are the https profile's public name, with its port and without (port 443).
       ALLOWED_HOSTS: localhost:${WEB_PORT:-3000},127.0.0.1:${WEB_PORT:-3000},${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443},${PMX_PUBLIC_HOST:-localhost}
-      WEB_ORIGINS: http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000},https://${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443},https://${PMX_PUBLIC_HOST:-localhost}
+      WEB_ORIGINS: *web-origins
+      # The https proxy sends this value as X-Pmx-Hop; only then is X-Forwarded-For passed on.
+      PMX_PROXY_HOP_FILE: /run/secrets/pmx_proxy_hop
+    secrets: [pmx_proxy_hop]
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
-    networks: [edge, app]
+    networks:
+      edge: {}
+      app:
+        ipv4_address: 172.30.10.10 # the engine's PARSEMAXXING_TRUSTED_PROXIES
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m
     healthcheck:
@@ -244,8 +254,8 @@ services:
   # with HSTS (scripts/Caddyfile). PMX_PUBLIC_HOST is the host name the browser uses (default
   # localhost), HTTPS_PORT the published port (default 8443); PMX_TLS is "internal" (Caddy's own
   # CA, kept in the caddy-data volume) or "/certs/<cert>.pem /certs/<key>.pem" for an admin
-  # certificate in ./certs. A non-loopback HTTPS_BIND exposes the login-less UI beyond this
-  # machine; `make up` refuses it unless PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes.
+  # certificate in ./certs. A non-loopback HTTPS_BIND exposes the UI beyond this machine before
+  # the Phase 14 hardening; `make up` refuses it unless PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes.
   https:
     profiles: [https]
     image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
@@ -261,6 +271,7 @@ services:
     configs:
       - source: caddyfile
         target: /etc/caddy/Caddyfile
+    secrets: [pmx_proxy_hop] # owned by web's uid 1000; read here as root (DAC_READ_SEARCH)
     ports:
       - "${HTTPS_BIND:-127.0.0.1}:${HTTPS_PORT:-8443}:8443"
     networks: [edge]
@@ -293,11 +304,19 @@ secrets:
     file: ./secrets/postgres_password
   postgres_app_password:
     file: ./secrets/postgres_app_password
+  pmx_proxy_hop:
+    file: ./secrets/pmx_proxy_hop
 
 networks:
   edge: {}
   app:
     internal: true
+    ipam:
+      config:
+        # Fixed so the web container's address is known; others get addresses from ip_range,
+        # which excludes the web container's.
+        - subnet: 172.30.10.0/24
+          ip_range: 172.30.10.128/25
   data:
     internal: true
   splunk_api:

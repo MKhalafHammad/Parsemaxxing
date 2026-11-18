@@ -9,7 +9,7 @@ From raw sample logs to a tested, CIM-compliant Splunk add-on, verified by Splun
 
 - **Setup:** [step-by-step guide](docs/setup.md)
 - **Status:** the v1 feature set is built; the multi-environment platform (v2) is being built phase by phase ([docs/build-plan.md](docs/build-plan.md)). Anything not built is marked **planned**.
-- **Phases 12 to 14 must land before the platform is exposed beyond localhost.** Until then there is no login, so keep every port on `127.0.0.1`.
+- **Do not expose the platform beyond localhost before Phase 14 lands.** Sign-in with roles, MFA and API tokens is built (Phase 13, in review), but LDAP and the rest of the hardening are not, so keep every port on `127.0.0.1`.
 
 ![Parsemaxxing run workspace](docs/img/run-workspace.png)
 
@@ -109,7 +109,8 @@ Built is what the code does today; the full list is in [docs/features.md](docs/f
 | Parser updates: find what broke with no model call, patch only that, keep every version for rollback | **Built** |
 | One-command setup (`make up`) that starts and prepares its own Splunk | **Built** |
 | Hardened Docker runtime, settings service, encrypted secrets vault, ledger hash chain, encrypted database backups | **Built** (Phase 12, in review); settings screens planned (Phase 15) |
-| Login with `viewer` and `admin` roles, MFA, API tokens; LDAP | Planned (Phases 13–14) |
+| Sign-in with `viewer` and `admin` roles, TOTP MFA, API tokens, audit log; CLI changes through the API | **Built** (Phase 13, in review) |
+| LDAP sign-in | Planned (Phase 14) |
 | App shell with navigation and a setup wizard | Planned (Phase 15) |
 | Any LLM provider and model, chosen per agent | Planned (Phase 16) |
 | Customers, environments and topology detection | Planned (Phase 17) |
@@ -159,7 +160,7 @@ git clone https://github.com/MKhalafHammad/Parsemaxxing.git && cd Parsemaxxing
 make env                  # create .env and passwords; it ends with a reminder to set your key
 # set LLM_API_KEY in .env (read its Splunk licence lines); copy the CIM .tgz into lab/
 make up                   # start and prepare Splunk, PostgreSQL, engine and UI
-make first-run            # upload the bundled synthetic sample; then open http://localhost:3000
+make setup-token          # a one-time token; open http://localhost:3000, create the admin, enrol MFA
 ```
 
 Every step, from installing Docker to approving your first add-on, is in **[docs/setup.md](docs/setup.md)**. Setup takes about 15 minutes, most of it Splunk's first start.
@@ -177,7 +178,7 @@ The model is set only through settings (`llm.base_url`, `llm.model`, the key in 
 
 - **Do not upload real production logs to a hosted model.** Use the synthetic generator, mask your data, or use on-prem mode. Masking before any hosted model and deleting real logs 30 days after a job ends at most are planned (Phase 21).
 - Agents cannot deploy; test deploys use separate names and `pmx_*` indexes only; every port is bound to `127.0.0.1`.
-- There is no login yet: keep the platform on localhost until Phases 13 and 14 land.
+- Every API route needs a session or an API token, with `viewer` and `admin` roles and MFA required for admins (Phase 13, in review). Keep the platform on localhost until Phase 14 lands.
 - The v2 security baseline (OWASP Top 10:2025, OWASP Top 10 for LLM Applications 2025, OWASP Top 10 for Agentic Applications 2026, and more) maps each control to code, test and status: [docs/security-baseline.md](docs/security-baseline.md). Threat model: [docs/threat-model.md](docs/threat-model.md).
 - Report vulnerabilities privately: [SECURITY.md](SECURITY.md).
 
@@ -186,7 +187,8 @@ The model is set only through settings (`llm.base_url`, `llm.model`, the key in 
 - One standalone Splunk Enterprise instance; no Splunk Cloud, clusters or forwarders yet; no `inputs.conf`.
 - Four formats (JSON, key=value, syslog, CSV) and three CIM models (Authentication, Network_Traffic, Web).
 - Without an answer key, code proves every time and value, but not meaning: a wrongly stated timezone, or a value mapped to the wrong but allowed CIM value, passes the checks. The approval report lists those decisions for the human who approves.
-- No login: the web UI is for localhost only.
+- Local accounts only (LDAP is planned, Phase 14), and the platform is for localhost only until then. Safari needs the `https` profile, because it does not keep the `__Host-` session cookie on plain `http://localhost`.
+- `make first-run`, the `demo/` scripts and the CLI need an admin API token in `PARSEMAXXING_API_TOKEN` ([docs/setup.md](docs/setup.md)).
 - Settings come from `.env` or are imported once from it into the settings store and vault (`parsemaxxing settings import-env`); there is no settings screen yet. One LLM provider at a time.
 
 ## Documentation

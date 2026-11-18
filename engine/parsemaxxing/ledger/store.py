@@ -121,15 +121,21 @@ class Store:
     # --- intake ------------------------------------------------------------------------
 
     def enqueue(
-        self, job: str, source_key: str, sha256: str, sample_path: str, form: dict
+        self,
+        job: str,
+        source_key: str,
+        sha256: str,
+        sample_path: str,
+        form: dict,
+        created_by: str | None = None,
     ) -> tuple[str, bool]:
         """Insert a queued job, or return the active job with the same content or source key."""
         try:
             with self.conn.transaction():
                 self.conn.execute(
-                    "INSERT INTO jobs (id, status, source_key, content_sha256, sample_path, form)"
-                    " VALUES (%s, 'queued', %s, %s, %s, %s)",
-                    (job, source_key, sha256, sample_path, Jsonb(form)),
+                    "INSERT INTO jobs (id, status, source_key, content_sha256, sample_path, form,"
+                    " created_by) VALUES (%s, 'queued', %s, %s, %s, %s, %s)",
+                    (job, source_key, sha256, sample_path, Jsonb(form), created_by),
                 )
                 self.event(job, "queued", {"source_key": source_key})
             return job, False

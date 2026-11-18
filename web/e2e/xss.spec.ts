@@ -1,6 +1,6 @@
-import { expect, test, type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
-import { DIFF_MARKERS, LEDGER, mockRun, run, XSS } from "./fixtures";
+import { DIFF_MARKERS, expect, LEDGER, mockRun, run, signedInAs, test, user, XSS } from "./fixtures";
 
 function watchDialogs(page: Page): string[] {
   const dialogs: string[] = [];
@@ -188,5 +188,70 @@ test("an API error message and request id render as text", async ({ page }) => {
   await page.goto("/runs/e2e00001");
   await expect(page.getByRole("main").getByRole("alert")).toContainText(`no run ${XSS}`);
   await expect(page.getByRole("main").getByRole("alert")).toContainText(`Request id ${XSS}`);
+  await nothingInjected(page, dialogs);
+});
+
+test("account, users, tokens and audit strings render as text", async ({ page }) => {
+  const dialogs = watchDialogs(page);
+  const me = user("admin", { display_name: XSS });
+  await page.route("**/api/engine/auth/me", (r) => r.fulfill({ json: { user: me, stage: "full", via: "session" } }));
+  await page.route("**/api/engine/auth/sessions", (r) =>
+    r.fulfill({ json: [{ id: "00000000-0000-4000-8000-0000000000s1", created_at: "x", last_seen_at: XSS, expires_at: "x", ip: XSS, user_agent: XSS, current: false }] }),
+  );
+  await page.route("**/api/engine/auth/users", (r) => r.fulfill({ json: [user("viewer", { display_name: XSS, username: XSS, source: XSS })] }));
+  await page.route("**/api/engine/auth/tokens", (r) =>
+    r.fulfill({ json: [{ id: "00000000-0000-4000-8000-0000000000aa", name: XSS, role: "viewer", owner: XSS, created_at: XSS, expires_at: XSS, last_used_at: XSS, status: "active" }] }),
+  );
+  await page.route("**/api/engine/audit*", (r) =>
+    r.fulfill({ json: [{ id: 1, at: XSS, actor: XSS, user_id: null, event: XSS, outcome: XSS, ip: XSS, detail: { reason: XSS } }] }),
+  );
+
+  await page.goto("/me/security");
+  await expect(page.getByRole("navigation", { name: "Main" })).toContainText(XSS);
+  await expect(page.getByRole("table", { name: "Active sessions" })).toContainText(XSS);
+  await nothingInjected(page, dialogs);
+  await page.goto("/settings/users");
+  await expect(page.getByRole("table", { name: "Users" })).toContainText(XSS);
+  await nothingInjected(page, dialogs);
+  await page.goto("/settings/api-tokens");
+  await expect(page.getByRole("table", { name: "API tokens" })).toContainText(XSS);
+  await page.getByRole("button", { name: `Revoke… ${XSS}` }).click();
+  await expect(page.getByRole("alertdialog")).toContainText(`Revoke token "${XSS}"?`);
+  await nothingInjected(page, dialogs);
+  await page.goto("/settings/audit-log");
+  await expect(page.getByRole("table", { name: "Audit log" })).toContainText(JSON.stringify({ reason: XSS }));
+  await nothingInjected(page, dialogs);
+  expect(await page.locator("header script, header img").count()).toBe(0);
+});
+
+test("sign-in and MFA errors from the engine render as text", async ({ page }) => {
+  const dialogs = watchDialogs(page);
+  await page.route("**/api/engine/setup", (r) => r.fulfill({ json: { needed: false } }));
+  await page.route("**/api/engine/auth/login", (r) => r.fulfill({ status: 401, json: { error: { code: "e", message: XSS, request_id: XSS }, detail: XSS } }));
+  await page.goto("/login");
+  await page.getByLabel("User name").fill(XSS);
+  await page.getByLabel("Password", { exact: true }).fill(XSS);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByRole("main").getByRole("alert")).toContainText(XSS);
+  await page.route("**/api/engine/auth/mfa/enrol", (r) => r.fulfill({ json: { secret: XSS, otpauth_uri: XSS } }));
+  await signedInAs(page, "admin", "enrol");
+  await page.goto("/mfa/enrol");
+  await expect(page.getByLabel("Setup key")).toHaveText(XSS);
+  // Field-level errors (MFA step, setup token) are the engine's text, escaped.
+  await page.route("**/api/engine/auth/login/mfa", (r) => r.fulfill({ status: 401, json: { error: { code: "e", message: XSS, request_id: "r" }, detail: XSS } }));
+  await page.goto("/login/mfa");
+  await page.getByLabel("6-digit code").fill("123456");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page.locator("#code-error")).toContainText(XSS);
+  await page.route("**/api/engine/setup", (r) =>
+    r.request().method() === "GET" ? r.fulfill({ json: { needed: true } }) : r.fulfill({ status: 403, json: { error: { code: "e", message: XSS, request_id: "r" }, detail: XSS } }),
+  );
+  await page.goto("/setup");
+  await page.getByLabel("Setup token").fill(XSS);
+  await page.getByLabel("User name").fill("avery");
+  await page.getByLabel("Password", { exact: true }).fill("a long enough password");
+  await page.getByRole("textbox", { name: "Password again" }).fill("a long enough password");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.locator("#token-error")).toContainText(XSS);
   await nothingInjected(page, dialogs);
 });

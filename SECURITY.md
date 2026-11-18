@@ -30,7 +30,15 @@ Parsemaxxing v2 is under development and has no 2.0.0 release yet. Only the late
 - `.env` is git-ignored; `.env.example` holds placeholders only.
 - gitleaks runs on every commit (pre-commit) and over the full git history in CI.
 - At runtime, the LLM key and the Splunk tokens can be kept in an encrypted vault (AES-256-GCM under a key-encryption key in a Docker secret, `secrets/pmx_kek`); `docs/setup.md` says how to back up that key. Database backups are encrypted with `age`.
+- Passwords are stored as Argon2id hashes; sessions, API tokens (`pmxt_...`), recovery codes and the setup token only as SHA-256 hashes; TOTP secrets only in the vault. No password, token or code is written to logs or the audit log.
 - Runtime guardrails are described in [docs/design.md](docs/design.md), section "Guardrails and security", and the threat model in [docs/threat-model.md](docs/threat-model.md).
+
+## Accounts and access
+
+- Built in Phase 13 (in review): local accounts with `viewer` and `admin` roles, TOTP MFA required for admins by default, server-side sessions, API tokens with an expiry of at most 90 days, and an audit log nobody can edit. Every API route needs a session or a token. LDAP is planned (Phase 14).
+- There are no default credentials. The first admin is created with a one-time setup token (`make setup-token`).
+- Lost access: `parsemaxxing admin reset <user>` on the host (needs the database owner credentials) sets a new password, clears MFA, unlocks the account and revokes its sessions and tokens.
+- Do not expose the platform beyond localhost before Phase 14 lands. `make up` refuses a non-loopback `HTTPS_BIND` unless you opt in.
 
 ## Real log retention
 

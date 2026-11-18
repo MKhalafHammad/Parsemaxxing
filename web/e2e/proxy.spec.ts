@@ -77,3 +77,43 @@ test("pages and the API carry security headers, with a nonce instead of unsafe-i
   const api = await request.get("/api/engine/runs");
   expect(api.headers()["x-content-type-options"]).toBe("nosniff");
 });
+
+test("a page without a session cookie redirects to sign-in; (auth) pages and the API do not", async ({ playwright }) => {
+  const anon = await playwright.request.newContext({ baseURL: "http://localhost:3100", storageState: { cookies: [], origins: [] } });
+  const r = await anon.get("/runs/abcd1234?phase=cim", { maxRedirects: 0 });
+  expect(r.status()).toBe(307);
+  expect(r.headers()["location"]).toMatch(/\/login\?next=%2Fruns%2Fabcd1234%3Fphase%3Dcim$/);
+  for (const path of ["/login", "/login/mfa", "/login/recovery", "/setup", "/mfa/enrol"]) {
+    expect((await anon.get(path, { maxRedirects: 0 })).status(), path).toBe(200);
+  }
+  expect((await anon.get("/api/engine/auth/me", { maxRedirects: 0 })).status()).toBe(502); // forwarded
+  await anon.dispose();
+});
+
+test("the auth routes are allowlisted with their methods and id shapes", async ({ request }) => {
+  const id = "00000000-0000-4000-8000-000000000001";
+  const forwarded = [
+    ["GET", "setup"], ["POST", "setup"], ["POST", "auth/login"], ["POST", "auth/login/mfa"], ["POST", "auth/logout"],
+    ["GET", "auth/me"], ["POST", "auth/password"], ["POST", "auth/mfa/enrol"], ["POST", "auth/mfa/confirm"],
+    ["POST", "auth/mfa/disable"], ["POST", "auth/mfa/recovery-codes"], ["GET", "auth/sessions"],
+    ["POST", `auth/sessions/${id}/revoke`], ["POST", "auth/sessions/revoke-all"], ["GET", "auth/tokens"],
+    ["POST", "auth/tokens"], ["POST", `auth/tokens/${id}/revoke`], ["GET", "auth/users"], ["POST", "auth/users"],
+    ["POST", `auth/users/${id}/role`], ["POST", `auth/users/${id}/disable`], ["POST", `auth/users/${id}/enable`],
+    ["POST", `auth/users/${id}/sessions/revoke`], ["GET", "audit"],
+  ];
+  for (const [method, path] of forwarded) {
+    const r = await request.fetch(`/api/engine/${path}`, { method, headers: SAME });
+    expect(r.status(), `${method} ${path}`).toBe(502);
+  }
+  const refused = [
+    ["GET", "auth/login"], ["POST", "auth/me"], ["POST", "audit"], ["POST", "auth/users/not-a-uuid/role"],
+    ["POST", `auth/users/${id}/delete`], ["POST", "auth/tokens/0000000A-0000-4000-8000-00000000000B/revoke"], ["GET", "health"],
+  ];
+  for (const [method, path] of refused) {
+    const r = await request.fetch(`/api/engine/${path}`, { method, headers: SAME });
+    expect(r.status(), `${method} ${path}`).toBe(404);
+  }
+  // A sign-in from another site is refused like any other state change.
+  const foreign = await request.post("/api/engine/auth/login", { headers: { ...SAME, Origin: "https://evil.example.com" }, data: {} });
+  expect(foreign.status()).toBe(403);
+});

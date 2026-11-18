@@ -13,5 +13,9 @@
 		Strict-Transport-Security "max-age=31536000"
 		-Server
 	}
-	reverse_proxy web:3000
+	# X-Pmx-Hop (the pmx_proxy_hop secret) tells web that X-Forwarded-For was set here; header_up
+	# replaces any X-Pmx-Hop the client sent.
+	reverse_proxy web:3000 {
+		header_up X-Pmx-Hop {file./run/secrets/pmx_proxy_hop}
+	}
 }

@@ -1,6 +1,7 @@
 """Settings service (design 7.5). See README.md for the interface."""
 
 from parsemaxxing.settings.groups import (
+    AuthSettings,
     BackupSettings,
     IngestSettings,
     LlmSettings,
@@ -19,6 +20,7 @@ from parsemaxxing.settings.service import Change, ConflictError, Effective, Sett
 
 __all__ = [
     "PLATFORM",
+    "AuthSettings",
     "BackupSettings",
     "Change",
     "ConflictError",

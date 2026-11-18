@@ -16,17 +16,19 @@ fi
 DOCKER=${DOCKER:-docker}
 compose() { $DOCKER compose "$@"; }
 
-# The UI has no login yet: the https proxy stays on loopback unless the admin opts in (M3).
+# Login exists (Phase 13), but nothing goes beyond localhost before the Phase 14 hardening
+# (LDAP, build-plan): the https proxy stays on loopback unless the admin opts in (M3).
 bind=${HTTPS_BIND-$(grep -sE '^HTTPS_BIND=' .env | tail -n1 | cut -d= -f2- | tr -d "\"' " || true)}
 case "$bind" in
   "" | 127.0.0.1 | ::1 | "[::1]" | localhost) ;;
   *)
     if [ "${PMX_ALLOW_UNAUTHENTICATED_NETWORK:-}" != yes ]; then
-      echo "refused: HTTPS_BIND=$bind would expose the UI, which has no login yet (login lands in Phase 13)." >&2
+      echo "refused: HTTPS_BIND=$bind would expose the UI beyond this machine. Login is built, but" >&2
+      echo "  exposure beyond localhost waits for the Phase 14 hardening (LDAP, docs/build-plan.md)." >&2
       echo "  Use 127.0.0.1, or set PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes to accept the risk." >&2
       exit 1
     fi
-    echo "warning: HTTPS_BIND=$bind exposes the UI without a login (PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes)" >&2
+    echo "warning: HTTPS_BIND=$bind exposes the UI before the Phase 14 hardening (PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes)" >&2
     ;;
 esac
 
@@ -81,6 +83,9 @@ echo "starting the engine and the web UI"
 compose up -d --build
 wait_healthy engine 300
 
+# First run: no admin yet. The token is printed only by `make setup-token`, to the terminal.
+setup_needed=$(compose exec -T engine python -I -c "import json, urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8080/setup', timeout=10))['needed'])" 2>/dev/null || true)
+
 WEB_PORT=$(grep -E '^WEB_PORT=' .env | cut -d= -f2- || true)
 SPLUNK_WEB_PORT=$(grep -E '^SPLUNK_WEB_PORT=' .env | cut -d= -f2- || true)
 cat <<EOF
@@ -90,3 +95,11 @@ Parsemaxxing is up.
   Splunk Web:  http://localhost:${SPLUNK_WEB_PORT:-8000}  (user admin, password SPLUNK_PASSWORD in .env)
 First run:     make first-run
 EOF
+if [ "$setup_needed" = True ]; then
+  cat <<EOF
+
+Setup needed: no admin account exists yet.
+  1. make setup-token   (prints a one-time token, valid 60 minutes)
+  2. open http://localhost:${WEB_PORT:-3000} and create the first admin with that token
+EOF
+fi

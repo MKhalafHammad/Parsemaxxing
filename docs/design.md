@@ -618,8 +618,8 @@ Plain Python, no agent framework: the flow is fixed and small, and readable code
 | Lab | Splunk Enterprise standalone on a VM | Real Splunk for the lab probes | Built |
 | Local stack | `docker-compose.yml` with the official Splunk Enterprise image + the app | One-command setup (`make up`) | Built |
 | LDAP | `ldap3` | Pure-Python client with LDAPS, StartTLS and RFC 4515 filter escaping ([7.4](#74-ldap)) | Planned (Phase 14) |
-| Password hashing | `argon2-cffi` | Argon2id, the OWASP-recommended algorithm ([7.3](#73-authentication-and-authorization)) | Planned (Phase 13) |
-| MFA | `pyotp` | TOTP per RFC 6238 ([7.3](#73-authentication-and-authorization)) | Planned (Phase 13) |
+| Password hashing | `argon2-cffi` 25.1.0 | Argon2id, the OWASP-recommended algorithm ([7.3](#73-authentication-and-authorization)) | Built (Phase 13) |
+| MFA | `pyotp` 2.10.0 | TOTP per RFC 6238 ([7.3](#73-authentication-and-authorization)) | Built (Phase 13) |
 | Encryption | `cryptography` | AES-256-GCM envelope encryption for the vault; no custom crypto ([7.5](#75-settings-from-the-ui-and-the-secrets-vault)) | Built (Phase 12) |
 | LLM client (Anthropic) | `anthropic` SDK | Adapter for the `anthropic` provider kind; the `openai` SDK stays for OpenAI-compatible and Azure ([7.6](#76-llm-providers-and-per-agent-models)) | Planned (Phase 16) |
 | Vector search | `pgvector` extension (`pgvector/pgvector` image pinned by digest) | Retrieval inside the existing PostgreSQL, no extra service ([7.12](#712-knowledge-base-rag)) | Planned (Phase 20) |
@@ -699,7 +699,7 @@ Each was tested against the real Meta Model API and Splunk; details and evidence
 | [v2 target architecture](#v2-target-architecture) | 12 to 23 | Planned |
 | [7.1 Environments, customers and topology](#71-environments-customers-and-topology) | 17 | Planned |
 | [7.2 Deployment pipeline](#72-deployment-pipeline-build-and-deploy-are-separate) | 18 | Planned |
-| [7.3 Authentication and authorization](#73-authentication-and-authorization) | 13 | Planned |
+| [7.3 Authentication and authorization](#73-authentication-and-authorization) | 13 | Built (Phase 13, in review), except Reset MFA and Unlock routes and the idle-timeout banner (15), and raw-sample audit and masking for viewers (with customers, 17 and 21); LDAP is 7.4 |
 | [7.4 LDAP](#74-ldap) | 14 | Planned |
 | [7.5 Settings and the secrets vault](#75-settings-from-the-ui-and-the-secrets-vault) | 12 (environment and client scopes with 17) | Partly built (Phase 12: settings service, vault, v1 import, database backups; UI, per-job snapshots, expiry tracking and package-store backups planned) |
 | [7.6 LLM providers and per-agent models](#76-llm-providers-and-per-agent-models) | 16 | Planned |
@@ -723,7 +723,7 @@ Each was tested against the real Meta Model API and Splunk; details and evidence
 | --- | --- | --- |
 | One standalone Splunk set in `.env` | Environments, linked sandboxes and topology (7.1); the v1 Splunk becomes the sandbox `local-sandbox` by migration | 17 |
 | One LLM endpoint (`LLM_BASE_URL`, `LLM_MODEL`) | Provider registry and per-agent models (7.6) | 16 |
-| No users, localhost only (R1) | Roles, local accounts, sessions, API tokens (7.3), LDAP (7.4) | 13, 14 |
+| No users, localhost only (R1) | Roles, local accounts, sessions, API tokens (7.3, built in Phase 13), LDAP (7.4) | 13, 14 |
 | Settings only in `.env` | Settings service and vault; `.env` keeps bootstrap values only (7.5) | 12 |
 | Promotion and rollback on the one Splunk, CLI only | Build and deploy split (7.2), version control (7.15) | 17b, 18 |
 | CIM spec pinned for three models from one version | CIM library per version and environment (7.16) | 17c |
@@ -1037,7 +1037,19 @@ Produces a deployment bundle: the `.tgz`, a `SHA256SUMS` file, and a numbered ru
 
 ## 7.3 Authentication and authorization
 
-**Status: planned (Phase 13).** Closes residual risks R1 and R10.
+**Status: built (Phase 13, in review).** Closes residual risks R1 and R10; exposure beyond localhost still waits for Phase 14. Code: `engine/parsemaxxing/auth/` ([README](../engine/parsemaxxing/auth/README.md)). Not built: Reset MFA and Unlock routes for admins (Phase 15; `parsemaxxing admin reset` covers both today), the idle-timeout warning banner (Phase 15, WCAG 2.2.1), a QR code at MFA enrolment (Phase 15), the audit of viewers' raw-sample views and "mask raw samples for viewers" (no production customers before Phase 17; masking 21). LDAP is 7.4 (Phase 14).
+
+What Phase 13 built, beyond the table below:
+- The common-password list is the project's own, 672 entries: smaller than a published top-10k list. Lockout: 5 failures per user name and 20 per client IP, 60 s doubling to 900 s; unknown user names lock like known ones.
+- MFA: ±1 step, a step at or before the last one used is refused (replay), 10 single-use recovery codes; the TOTP secret only in the vault. Enrolling on a signed-in session asks for the password again.
+- API tokens: expiry 1 to 90 days; the effective role is the lower of the token's and the owner's current role; revoked on the owner's password change, role change, disable and admin reset. Tokens are created only from a session.
+- CLI: `run`, `update`, `approve`, `reject`, `promote`, `rollback` and `kill` use the API with a token from `PARSEMAXXING_API_TOKEN` or `--token-file` (mode 0600 or 0400), never a command-line value; plain http only to a loopback address or `engine`. `run`, `update` and `promote` therefore need `parsemaxxing serve` (or the stack) running; `run --local` still runs without API and database.
+- New route `POST /tas/{app}/rollback` (admin, audited). It acts on the sandbox only; production rollback needs Phase 18's approval rule first.
+- First run: one setup token shared by every engine worker; `make setup-token` (or `parsemaxxing setup-token`) issues a new one. Break-glass: `parsemaxxing admin reset <user>` on the host.
+- Audit: `auth_events`, append-only with its own hash chain, checked by `ledger verify`; `jobs.created_by` records who started a run. The audit log screen is readable by viewers, as below, and shows client IPs (owner decision to confirm; threat model R24).
+- Client IP: the engine trusts `X-Forwarded-For` only from the web container (`PARSEMAXXING_TRUSTED_PROXIES`, set by docker-compose to its fixed address on the app network); the web container passes a client's `X-Forwarded-For` on only when the `https` proxy's `X-Pmx-Hop` header matches the `pmx_proxy_hop` Docker secret.
+- An open event stream re-checks its session or token every 15 s and closes once it is no longer valid.
+- Screens: sign in, MFA step and recovery code, setup, MFA enrolment, account security, API tokens, users and audit log; admin-only controls are wrapped in `<AdminOnly>` (disabled with "Admin only" for viewers).
 
 | Area | Design |
 | --- | --- |

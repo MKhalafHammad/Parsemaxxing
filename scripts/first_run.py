@@ -32,7 +32,16 @@ def request(
         else http.client.HTTPConnection
     )
     conn = cls(url.hostname or "127.0.0.1", url.port, timeout=60)
-    headers = {"X-Parsemaxxing": "1", **({"Content-Type": ctype} if ctype else {})}
+    token = os.environ.get("PARSEMAXXING_API_TOKEN", "")
+    if not token:
+        raise SystemExit(
+            "make first-run: set PARSEMAXXING_API_TOKEN to an admin API token (UI: Settings > API tokens)"
+        )
+    headers = {
+        "X-Parsemaxxing": "1",
+        "Authorization": f"Bearer {token}",
+        **({"Content-Type": ctype} if ctype else {}),
+    }
     try:
         conn.request(method, path, body=body, headers=headers)
         r = conn.getresponse()

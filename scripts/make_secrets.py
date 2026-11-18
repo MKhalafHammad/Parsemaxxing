@@ -3,14 +3,17 @@
   secrets/pmx_kek                32 random bytes, base64, one line (the vault's KEK)
   secrets/postgres_password      the database owner's password
   secrets/postgres_app_password  the engine role's password (parsemaxxing_app)
+  secrets/pmx_proxy_hop          32 random bytes, base64: the https proxy's X-Pmx-Hop header, so
+                                 the web container trusts X-Forwarded-For only from the proxy
 
 The two passwords are taken from .env (POSTGRES_PASSWORD, POSTGRES_APP_PASSWORD) when set there,
 so an existing database volume keeps working; otherwise they are generated. Files have no
 trailing newline; readers strip whitespace anyway.
 
 Docker bind-mounts file secrets with their host owner and mode, so each file is made 0400 and
-owned by the containers' user (uid 10001, engine/Dockerfile) through a throwaway container:
-after that, your own user cannot read it (use `sudo cat` to back up the KEK). Never prints a
+owned by its reader (uid 10001, engine/Dockerfile; pmx_proxy_hop: uid 1000, the web image's
+"node", also read by the https proxy, which runs as root) through a throwaway container: after
+that, your own user cannot read it (use `sudo cat` to back up the KEK). Never prints a
 secret. Set DOCKER="sudo docker" if your user cannot reach the Docker socket.
 
 Usage: python3 scripts/make_secrets.py
@@ -30,13 +33,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DIR, ENV = ROOT / "secrets", ROOT / ".env"
 UID = 10001  # the engine image's user; postgres reads as root before dropping to its own user
+# The web image's "node" user; Caddy reads it as root with DAC_READ_SEARCH, so one file serves both.
+OWNER = {"pmx_proxy_hop": 1000}
 # The stack's own pinned PostgreSQL image (scripts/refresh_digests.py), so no extra pull.
 IMAGE = "postgres:17.11-alpine@sha256:e5d2edd28b1f8d40a0a6c0c9cdc545b19b56a0d5d88f94bc11a97d970d4700d0"
 FROM_ENV = {  # nosec B105: variable names, not values
     "postgres_password": "POSTGRES_PASSWORD",
     "postgres_app_password": "POSTGRES_APP_PASSWORD",
 }
-NAMES = ("pmx_kek", "postgres_password", "postgres_app_password")
+NAMES = ("pmx_kek", "postgres_password", "postgres_app_password", "pmx_proxy_hop")
+# Base64 of 32 random bytes; the others are passwords.
+RANDOM = {"pmx_kek", "pmx_proxy_hop"}
 PLACEHOLDER = re.compile(r"^(changeme|your-).*")
 
 
@@ -95,27 +102,26 @@ def main() -> int:
             create(path, old)
             print(f"created secrets/{name} from .env {FROM_ENV[name]}")
         else:
-            create(path, kek() if name == "pmx_kek" else password())
+            create(path, kek() if name in RANDOM else password())
             print(f"created secrets/{name} (generated)")
-    wrong = sorted(
-        n
-        for n in NAMES  # only its own files: backup_recipients.txt stays the owner's
-        if (DIR / n).stat().st_uid != UID or (DIR / n).stat().st_mode & 0o777 != 0o400
-    )
-    if not wrong:
-        return 0
+    wrong: dict[int, list[str]] = {}
+    for n in NAMES:  # only its own files: backup_recipients.txt stays the owner's
+        uid, st = OWNER.get(n, UID), (DIR / n).stat()
+        if st.st_uid != uid or st.st_mode & 0o777 != 0o400:
+            wrong.setdefault(uid, []).append(n)
     docker = shlex.split(os.environ.get("DOCKER", "docker"))
-    targets = [f"/s/{n}" for n in wrong]
-    cmd = [*docker, "run", "--rm", "--network", "none", "--entrypoint", "sh",
-           "-v", f"{DIR}:/s", IMAGE, "-c", 'chown "$0" "$@" && chmod 0400 "$@"', f"{UID}:{UID}",
-           *targets]  # fmt: skip
-    if subprocess.run(cmd, check=False).returncode != 0:  # nosec B603
-        print(
-            "could not hand the secret files to uid 10001: is Docker running?",
-            file=sys.stderr,
-        )
-        return 1
-    print(f"secret files owned by uid {UID}, mode 0400: {', '.join(wrong)}")
+    for uid, names in sorted(wrong.items()):
+        targets = [f"/s/{n}" for n in names]
+        cmd = [*docker, "run", "--rm", "--network", "none", "--entrypoint", "sh",
+               "-v", f"{DIR}:/s", IMAGE, "-c", 'chown "$0" "$@" && chmod 0400 "$@"',
+               f"{uid}:{uid}", *targets]  # fmt: skip
+        if subprocess.run(cmd, check=False).returncode != 0:  # nosec B603
+            print(
+                f"could not hand the secret files to uid {uid}: is Docker running?",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"secret files owned by uid {uid}, mode 0400: {', '.join(names)}")
     return 0
 
 

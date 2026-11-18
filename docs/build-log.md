@@ -520,8 +520,26 @@ One entry per completed phase, appended at the end of the phase (see CLAUDE.md, 
 - API errors in one envelope with a request id; the web UI reads it. Error logs carry only the exception type and the request id; request bodies refuse unknown fields; URL settings refuse a user name or password. `make up` refuses a non-loopback `HTTPS_BIND` without `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes` and only warns when `LLM_API_KEY` is missing from `.env`.
 
 **Test results**
-- pytest on a host without PostgreSQL: 553 passed, 127 skipped (the database tests skip without PostgreSQL; CI runs them). Playwright, `make security`, the `images` and `restore-test` CI jobs: not re-run for this entry; see the pull request's CI.
+- pytest with PostgreSQL: 715 passed, 1 skipped (the real `pg_dump | age` round trip, which needs those tools; it passed once in a container). Playwright: 18 passed. bandit, semgrep, pip-audit and npm audit clean; `scripts/restore_test.sh` passed in a scratch stack.
 
 **Cut or deferred**
 - Per-job settings snapshots (the snapshot function exists; settings are read at process start), the wizard listing removable `.env` keys (Phase 15), the package store in backups (Phase 17b), the `pgvector/pgvector` image switch (Phase 20; the collation change needs a REINDEX plan), `make relay-test` (with the relay), TLS verification by default to Splunk (R2, still off), the R11 dev-dependency update.
 - New residual risks R17 to R22: Splunk container keeps `sudo`, Caddy runs as root with two capabilities, Debian packages not pinned by version, no external anchor for the ledger chain, an empty vault adopts the first KEK, three base images under 14 days old.
+
+## 2026-11-19 — Phase 13: Authentication and RBAC (in review)
+
+**Done**
+- Local accounts (Argon2id, the project's own 672-entry common-password list, smaller than a published top-10k list), lockout per user name (5) and per IP (20) with backoff from 60 s doubling to 900 s, TOTP MFA required for admins by default (replay guard, 10 single-use recovery codes), server-side sessions in `__Host-pmx_session` (idle 30 min and absolute 12 h as settings, rotation, revocation), and the Origin check against the `WEB_ORIGINS` list plus `X-Parsemaxxing: 1`.
+- A deny-by-default route policy registry, checked at startup and by a role-matrix test of every route; `auth_events` as an append-only hash chain checked by `ledger verify`; `jobs.created_by`; a one-time setup token shared by every engine worker (`make setup-token` issues a new one); break-glass `parsemaxxing admin reset`.
+- `pmxt_` API tokens (hashed, 1 to 90 days, role at most the creator's, effective role the lower of token and owner, revoked on password change, role change, disable and admin reset). `run`, `update`, `approve`, `reject`, `promote`, `rollback` and `kill` now go through the API with a token from `PARSEMAXXING_API_TOKEN` or `--token-file`, so `run`, `update` and `promote` need `serve` running. New admin route `POST /tas/{app}/rollback` (sandbox only).
+- Screens: sign in, MFA step, recovery code, setup, MFA enrolment, account security, API tokens, users and audit log, with `<AdminOnly>` on admin controls. The engine trusts `X-Forwarded-For` only from the web container, and the web container forwards it only when the `https` proxy's `X-Pmx-Hop` secret matches (checked live: Caddy replaces a forged value). An open event stream re-checks its credential every 15 s.
+
+**Test results**
+- pytest with PostgreSQL: 828 passed, 1 skipped (the `pg_dump | age` round trip). Playwright: 52 passed, including axe scans as admin and viewer and the proxy-hop tests. bandit, semgrep, pip-audit and npm audit clean. Caddy replacing a forged `X-Pmx-Hop` was checked live in a throwaway container.
+- pre-commit on every changed doc: clean (gitleaks, whitespace, end of file, merge conflicts, private keys).
+
+**Cut or deferred**
+- Idle-timeout warning banner (must ship with the Phase 15 shell, WCAG 2.2.1), QR code at MFA enrolment, Reset MFA and Unlock routes for admins (Phase 15), the kill-switch control in the UI (Phase 16), and an end-to-end test against a real engine (the Playwright tests mock it).
+- UX review must-fixes (Turn off MFA hidden while MFA is required, "Sign in as someone else" on the MFA, recovery and enrolment steps, times with a named zone) are in the working tree with tests, not yet committed at the time of this entry.
+- `make first-run` and the `demo/` scripts now send an admin API token from `PARSEMAXXING_API_TOKEN`; without one they stop with a message.
+- Exposure beyond localhost still refused until Phase 14. New residual risks: lockout of a named account for up to 15 minutes (R23), the audit log shows sign-in IPs to viewers (R24, owner decision to confirm), no idle warning (R25). R1 and R10 closed.
