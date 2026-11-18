@@ -85,7 +85,7 @@ def test_secrets_reach_only_the_services_that_need_them() -> None:
     assert holders("postgres_password") == {"postgres", "migrate"}
     assert holders("postgres_app_password") == {"engine", "migrate"}
     assert all(s["file"].startswith("./secrets/") for s in COMPOSE["secrets"].values())
-    assert "secrets/" in (ROOT / ".gitignore").read_text().splitlines()
+    assert "/secrets/" in (ROOT / ".gitignore").read_text().splitlines()
     for key in SERVICES["web"]["environment"]:
         assert "PASSWORD" not in key and "TOKEN" not in key and "KEY" not in key, key
 
