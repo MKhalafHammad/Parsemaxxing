@@ -27,6 +27,36 @@ SPLUNK_WRITE_LOCK = 7001
 LLM_SLOT_BASE = 7100
 
 
+GENESIS = "0" * 64  # prev_hash of the first ledger row (migration 006, section 5)
+
+
+def verify_ledger(conn: psycopg.Connection, batch: int = 5000, cap: int = 100) -> dict:
+    """Walk the ledger hash chain in id order. A row whose hash does not match its content was
+    edited (or its id changed: a reorder); a row whose prev_hash is not the previous row's hash
+    follows a deleted, inserted or moved row. Returns {"rows", "head", "problems"} (at most
+    `cap` problems). A deleted tail is detected only against a head recorded earlier."""
+    rows, last, problems = 0, GENESIS, []
+    after = -1
+    while True:
+        page = conn.execute(
+            "SELECT id, prev_hash, hash,"
+            " ledger_row_hash(prev_hash, id, job_id, at, event, data) AS expected"
+            " FROM ledger WHERE id > %s ORDER BY id LIMIT %s",
+            (after, batch),
+        ).fetchall()
+        if not page:
+            return {"rows": rows, "head": {"id": after, "hash": last}, "problems": problems}
+        for r in page:
+            if r["hash"] != r["expected"]:
+                problems.append({"id": r["id"], "problem": "content does not match its hash"})
+            if r["prev_hash"] != last:
+                problems.append(
+                    {"id": r["id"], "problem": "chain broken before this row (removed or moved)"}
+                )
+            rows, last, after = rows + 1, r["hash"], r["id"]
+        del problems[cap:]
+
+
 class LostLease(RuntimeError):
     """This worker no longer owns the job (lease expired and another worker took it)."""
 
@@ -211,6 +241,7 @@ class Store:
     # --- ledger ------------------------------------------------------------------------
 
     def event(self, job: str, event: str, data: dict | None = None) -> None:
+        """Append a ledger row; its id, prev_hash and hash are set by the chain trigger."""
         self.conn.execute(
             "INSERT INTO ledger (job_id, event, data) VALUES (%s, %s, %s)",
             (job, event, Jsonb(data or {})),
