@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-command stack for judges and local use (`make up`):
-#   1. .env: created from .env.example if missing, placeholder passwords generated;
+#   1. .env: created from .env.example if missing, placeholder passwords generated; secrets/
+#      (KEK and database passwords, scripts/make_secrets.py) created if missing;
 #   2. Splunk and PostgreSQL started and healthy;
 #   3. Splunk prepared (scripts/splunk_bootstrap.py, inside the container): test index, roles,
 #      users, the CIM add-on and its index macros, and fresh service tokens written to .env;
@@ -36,6 +37,7 @@ wait_healthy() { # service, seconds
 }
 
 python3 scripts/init_env.py
+DOCKER="$DOCKER" python3 scripts/make_secrets.py
 DOCKER="$DOCKER" scripts/migrate_v1_volumes.sh # v1 (parsewright_*) volumes; no-op otherwise
 
 echo "starting Splunk and PostgreSQL (Splunk's first start takes a few minutes)"

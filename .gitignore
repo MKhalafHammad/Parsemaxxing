@@ -13,6 +13,9 @@ splunk_token*
 *credentials*.json
 *credentials*.yaml
 *credentials*.yml
+# Docker secrets (make secrets), backup recipients, and the https profile's admin certificate
+/secrets/
+/certs/
 
 # --- Claude Code local overrides ---
 .claude/settings.local.json
@@ -68,5 +71,6 @@ Thumbs.db
 !**/generator/fixtures/**
 .runs/
 
-# --- Local backups (scripts/migrate_v1_volumes.sh) ---
+# --- Local backups (scripts/backup.sh, scripts/migrate_v1_volumes.sh) and SBOMs (make sbom) ---
 backups/
+/sbom/

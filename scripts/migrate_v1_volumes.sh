@@ -15,7 +15,7 @@ DOCKER=${DOCKER:-docker}
 OLD=parsewright
 NEW=parsemaxxing
 NAMES="splunk-etc splunk-var pgdata packages runs" # the volumes: block of docker-compose.yml
-IMAGE=postgres:17.11-alpine # already pulled for the stack, so no new image
+IMAGE=postgres:17.11-alpine@sha256:e5d2edd28b1f8d40a0a6c0c9cdc545b19b56a0d5d88f94bc11a97d970d4700d0 # the stack's own, no new image
 
 exists() { $DOCKER volume inspect "$1" >/dev/null 2>&1; }
 empty() { $DOCKER run --rm -v "$1":/v:ro --entrypoint sh "$IMAGE" -c '[ -z "$(ls -A /v)" ]'; }
