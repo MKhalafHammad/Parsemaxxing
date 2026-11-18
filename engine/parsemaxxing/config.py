@@ -48,9 +48,9 @@ ENV_KEYS = (
     "POSTGRES_APP_PASSWORD_FILE",
     "MIGRATE_DATABASE_URL",
 )
-# v1 secret variables: used only while the vault field is unset (`settings import-env` moves
-# them). Bootstrap-side so secret fields never get an environment override in the settings model.
-# Variable names, not values.
+# Secret variables: set and non-empty, a read-only override of the vault value (as for plain
+# settings: `make up` mints fresh Splunk tokens into .env each run). The same names are the `env`
+# of the secret fields in settings/groups.py (a test checks). Variable names, not values.
 LEGACY_SECRETS = {
     "llm_api_key": "LLM_API_KEY",
     "splunk_search_token": "SPLUNK_SEARCH_TOKEN",  # nosec B105
@@ -178,9 +178,9 @@ def _require(name: str) -> str:
 
 
 class Secrets:
-    """Opens a runtime secret at the moment of use: the vault id held by a secret-typed setting,
-    or, while that setting is unset, the v1 variable (transition; `settings import-env` ends it).
-    Never holds a vault value outside `use`; redacted in `repr`, refuses pickling."""
+    """Opens a runtime secret at the moment of use: its variable when set and non-empty (a
+    read-only override, read at process start), else the vault id held by the secret-typed
+    setting. Never holds a vault value outside `use`; redacted in `repr`, refuses pickling."""
 
     def __init__(
         self,
@@ -199,11 +199,13 @@ class Secrets:
         return cls(legacy=values)
 
     def source(self, name: str) -> str:
-        return "vault" if name in self._refs else "environment" if name in self._legacy else ""
+        return "env override" if name in self._legacy else "vault" if name in self._refs else ""
 
     @contextmanager
     def use(self, name: str) -> Iterator[str]:
-        if name in self._refs:
+        if name in self._legacy:  # the override wins, as for plain settings
+            yield self._legacy[name]
+        elif name in self._refs:
             from parsemaxxing.ledger import store as db
             from parsemaxxing.secrets import Kek, Vault
 
@@ -212,12 +214,10 @@ class Secrets:
                 self._kek = Kek.load(self._kek_path or kek_path())
             with db.connect(self._dsn) as conn, Vault(conn, self._kek).use(secret_id, scope) as p:
                 yield p.text()
-        elif name in self._legacy:
-            yield self._legacy[name]
         else:
             var = LEGACY_SECRETS.get(name, name)
             raise RuntimeError(
-                f"secret {name} is not set: store it in the vault "
+                f"secret {name} is not set: set {var} or store it in the vault "
                 f"(`parsemaxxing settings import-env` imports {var} from a v1 .env)"
             )
 
@@ -302,7 +302,7 @@ def runtime(local: bool = False) -> Settings:
         )
         if ref
     }
-    legacy = {n: env[v] for n, v in LEGACY_SECRETS.items() if n not in refs and env.get(v)}
+    legacy = {n: env[v] for n, v in LEGACY_SECRETS.items() if env.get(v)}
     missing = [
         f"{label} ({var})"
         for label, var, value in (
@@ -355,7 +355,12 @@ V1_SECRETS = {
 
 
 def import_v1_env(
-    conn: Any, values: Mapping[str, str], kek: Any, dry_run: bool, actor: str = "cli:import-env"
+    conn: Any,
+    values: Mapping[str, str],
+    kek: Any,
+    dry_run: bool,
+    actor: str = "cli:import-env",
+    process_env: Mapping[str, str] | None = None,
 ) -> tuple[list[str], list[str], bool]:
     """Move v1 .env values into settings (plain) and the vault (secrets). Idempotent: a value
     already stored is "unchanged". Returns (diff lines, variables now removable, ok). Secret
@@ -400,7 +405,10 @@ def import_v1_env(
         if not value:
             continue
         group, scope = SettingsGroup.registry[grp], Scope(env)
-        where = f"{grp}.{fld} [{env or 'platform'}]"
+        # The runtime source with this process environment, never the value: a set variable
+        # overrides the vault.
+        runtime = "env override" if (process_env or {}).get(var) else "vault"
+        where = f"{grp}.{fld} [{env or 'platform'}] (runtime source: {runtime})"
         ref = svc.stored(group, scope)[0].get(fld)
         if ref and vault is None:
             lines.append(f"  ? {where}: already set; not compared (no KEK in a dry run)")

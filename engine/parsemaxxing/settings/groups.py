@@ -1,20 +1,33 @@
 """The setting groups. Variable names are v1's: a v1 `.env` shows as "managed by environment".
 
-Secret fields hold vault ids; v1 secret variables (LLM_API_KEY, SPLUNK_*_TOKEN) are imported into
-the vault once and are not overrides.
+Secret fields hold vault ids. Their variables (LLM_API_KEY, SPLUNK_*_TOKEN) are read-only
+overrides like any other: set and non-empty, the variable's value is used at runtime instead of
+the vault (the settings service never reads the value, it only reports the source).
 """
 
-from pydantic import AnyHttpUrl
+from typing import Annotated
+
+from pydantic import AfterValidator, AnyHttpUrl
 
 from parsemaxxing.settings.model import SecretRef, SettingsGroup, setting
+
+
+def _no_userinfo(url: AnyHttpUrl) -> AnyHttpUrl:
+    # Credentials belong in the vault; a user:pass@ URL would store and show one in clear.
+    if url.username or url.password:
+        raise ValueError("a URL must not contain a user name or password")
+    return url
+
+
+Url = Annotated[AnyHttpUrl, AfterValidator(_no_userinfo)]  # every URL setting uses this
 
 
 class LlmSettings(SettingsGroup):
     GROUP = "llm"
     VERSION = 1
-    base_url: AnyHttpUrl | None = setting(None, env="LLM_BASE_URL")
+    base_url: Url | None = setting(None, env="LLM_BASE_URL")
     model: str | None = setting(None, env="LLM_MODEL", min_length=1, max_length=200)
-    api_key: SecretRef | None = setting(None, secret=True)
+    api_key: SecretRef | None = setting(None, env="LLM_API_KEY", secret=True)
     run_token_ceiling: int = setting(
         300_000, env="PARSEMAXXING_RUN_TOKEN_CEILING", ge=1_000, le=10_000_000
     )
@@ -32,8 +45,12 @@ class SplunkSettings(SettingsGroup):
         pattern=r"^[A-Za-z0-9.:-]+$",
     )
     port: int = setting(8089, scopes=("platform", "environment"), env="SPLUNK_PORT", ge=1, le=65535)
-    search_token: SecretRef | None = setting(None, scopes=("environment",), secret=True)
-    deploy_token: SecretRef | None = setting(None, scopes=("environment",), secret=True)
+    search_token: SecretRef | None = setting(
+        None, scopes=("environment",), env="SPLUNK_SEARCH_TOKEN", secret=True
+    )
+    deploy_token: SecretRef | None = setting(
+        None, scopes=("environment",), env="SPLUNK_DEPLOY_TOKEN", secret=True
+    )
     test_index: str = setting(
         "pmx_test",
         scopes=("platform", "environment", "client"),

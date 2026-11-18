@@ -195,17 +195,37 @@ def test_environment_variable_overrides_a_stored_setting(store_env, monkeypatch)
     assert config.runtime().llm_model == "from-env"
 
 
-def test_v1_secret_variable_is_used_only_while_the_vault_field_is_unset(store_env, monkeypatch):
+def test_a_set_secret_variable_overrides_the_vault(store_env, monkeypatch):
+    """`make up` mints fresh Splunk tokens into .env: they must win over older vault tokens."""
     conn, kek = store_env
     _configure(conn, kek)
-    monkeypatch.setenv("SPLUNK_DEPLOY_TOKEN", "legacy-deploy")
-    monkeypatch.setenv("SPLUNK_SEARCH_TOKEN", "legacy-search")
+    monkeypatch.setenv("SPLUNK_DEPLOY_TOKEN", "fresh-deploy")
+    monkeypatch.setenv("SPLUNK_SEARCH_TOKEN", "fresh-search")
+    monkeypatch.setenv("LLM_API_KEY", "")  # empty: not an override
     s = config.runtime()
     with s.secrets.use("splunk_deploy_token") as v:
-        assert v == "legacy-deploy"  # transition: not in the vault yet
+        assert v == "fresh-deploy"  # not in the vault at all
     with s.secrets.use("splunk_search_token") as v:
-        assert v == TOKEN  # the vault wins
-    assert s.secrets.source("splunk_search_token") == "vault"
+        assert v == "fresh-search"  # in the vault too: the variable wins
+    with s.secrets.use("llm_api_key") as v:
+        assert v == KEY  # from the vault
+    assert [s.secrets.source(n) for n in ("splunk_search_token", "llm_api_key")] == [
+        "env override",
+        "vault",
+    ]
+    assert "fresh-search" not in repr(s.secrets) and "env override" in repr(s.secrets)
+
+
+def test_secret_variables_match_the_settings_fields():
+    from parsemaxxing.settings import SettingsGroup
+
+    declared = {
+        cls.meta(f)["env"]
+        for cls in SettingsGroup.registry.values()
+        for f in cls.secret_fields()
+        if cls.meta(f)["env"]
+    }
+    assert declared == set(config.LEGACY_SECRETS.values()) == set(config.V1_SECRETS)
 
 
 def test_missing_required_settings_are_named(store_env):
@@ -221,7 +241,7 @@ def test_local_runtime_needs_no_database(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_API_KEY", "k")
     monkeypatch.setenv("PARSEMAXXING_PACKAGES_DIR", str(tmp_path))
     s = config.runtime(local=True)
-    assert s.dsn == "" and s.secrets.source("llm_api_key") == "environment"
+    assert s.dsn == "" and s.secrets.source("llm_api_key") == "env override"
 
 
 # --- one-time v1 .env import ----------------------------------------------------------------
@@ -256,7 +276,7 @@ def test_import_env_dry_run_then_apply_then_idempotent(store_env, tmp_path, caps
     assert _import(tmp_path, env_file, "--dry-run") == 0
     out = capsys.readouterr().out
     assert "dry run" in out and "llm.model [platform]: None -> 'muse'" in out
-    assert "splunk.search_token [lab]: secret set (value not shown)" in out
+    assert "splunk.search_token [lab] (runtime source: vault): secret set (value not shown)" in out
     assert SettingsService(conn, {}).stored(LlmSettings, PLATFORM) == ({}, 0)  # nothing written
 
     assert _import(tmp_path, env_file) == 0
@@ -284,7 +304,7 @@ def test_import_env_replaces_a_changed_secret_and_refuses_bad_values(store_env, 
     assert _import(tmp_path, _env_file(tmp_path)) == 0
     capsys.readouterr()
     assert _import(tmp_path, _env_file(tmp_path, SPLUNK_SEARCH_TOKEN="rotated-x")) == 0
-    assert "search_token [lab]: secret replaced" in capsys.readouterr().out
+    assert "search_token [lab] (runtime source: vault): secret replaced" in capsys.readouterr().out
     ref = SettingsService(conn, {}).get(SplunkSettings, LAB).search_token
     with Vault(conn, kek).use(ref, LAB) as p:
         assert p.text() == "rotated-x"
@@ -293,11 +313,32 @@ def test_import_env_replaces_a_changed_secret_and_refuses_bad_values(store_env, 
     assert SettingsService(conn, {}).get(SplunkSettings, LAB).test_index == "pmx_lab"
 
 
+def test_import_env_refuses_a_base_url_with_credentials(store_env, tmp_path, capsys, caplog):
+    conn, _ = store_env
+    url = "https://user:synthetic-pw-5e7a@llm.example.com/v1"
+    assert _import(tmp_path, _env_file(tmp_path, LLM_BASE_URL=url)) == 4
+    out = capsys.readouterr()
+    assert "LLM_BASE_URL is not a valid value" in out.out
+    assert "synthetic-pw-5e7a" not in out.out + out.err + caplog.text
+    assert SettingsService(conn, {}).stored(LlmSettings, PLATFORM)[0].get("base_url") is None
+
+
 def test_import_env_needs_the_kek_unless_dry_run(store_env, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PARSEMAXXING_KEK_FILE", str(tmp_path / "missing"))
     env_file = _env_file(tmp_path)
     assert _import(tmp_path, env_file) == 4
     assert _import(tmp_path, env_file, "--dry-run") == 0
+
+
+def test_import_env_shows_an_env_override_as_the_runtime_source(
+    store_env, tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("SPLUNK_SEARCH_TOKEN", "fresh-search-1a2b")
+    assert _import(tmp_path, _env_file(tmp_path)) == 0
+    out = capsys.readouterr().out
+    assert "splunk.search_token [lab] (runtime source: env override): secret set" in out
+    assert "splunk.deploy_token [lab] (runtime source: vault)" in out
+    assert "fresh-search-1a2b" not in out and TOKEN not in out
 
 
 def test_imported_settings_drive_the_runtime(store_env, tmp_path):

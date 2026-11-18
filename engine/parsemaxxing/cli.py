@@ -13,7 +13,9 @@
   parsemaxxing secrets rotate-kek --new-kek-file <path>  rewrap every vault data key
   parsemaxxing settings import-env [--env-file .env] [--dry-run]  move v1 .env values into
                                              settings and secrets into the vault (once)
-  parsemaxxing ledger verify                 check the ledger hash chain
+  parsemaxxing ledger verify [--expect-head <id>:<hash>]  check the ledger hash chain (and
+                                             that a recorded head is still in it)
+  parsemaxxing ledger head                   print the newest row as <id>:<hash> (an anchor)
   parsemaxxing backup [--out-dir backups]    encrypted pg_dump (age, recipient from settings)
   parsemaxxing restore <file> --identity <age key> --target-dsn <dsn> --yes
 
@@ -31,6 +33,8 @@ import sys
 import threading
 import uuid
 from pathlib import Path
+
+import psycopg
 
 from parsemaxxing import config
 from parsemaxxing.agents.llm import LLMClient, TokenCeilingExceeded
@@ -97,7 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     ie.add_argument("--dry-run", action="store_true", help="show the diff, write nothing")
     lg = sub.add_parser("ledger", help="the ledger")
     lg_sub = lg.add_subparsers(dest="ledger_command", required=True)
-    lg_sub.add_parser("verify", help="check the hash chain (edited, removed or moved rows)")
+    lv = lg_sub.add_parser("verify", help="check the hash chain (edited, removed or moved rows)")
+    lv.add_argument("--expect-head", help="<id>:<hash> from `ledger head`: must still be there")
+    lg_sub.add_parser("head", help="print the newest ledger row as <id>:<hash>")
     bk = sub.add_parser("backup", help="encrypted database backup (pg_dump | age)")
     bk.add_argument("--out-dir", type=Path, default=REPO / "backups")
     rs = sub.add_parser("restore", help="restore an encrypted backup into a database")
@@ -117,7 +123,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "settings":
         return import_env(args.import_file or args.env_file, args.dry_run)
     if args.command == "ledger":
-        return verify_ledger()
+        if args.ledger_command == "head":
+            with db.connect(database_url()) as conn:
+                print(db.ledger_head(conn))
+            return 0
+        return verify_ledger(args.expect_head)
     if args.command in ("backup", "restore"):
         return backup_or_restore(args)
     local = args.command == "run" and args.local
@@ -252,6 +262,17 @@ def rotate_kek(new_file: Path) -> int:
     except VaultError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 4
+    except psycopg.errors.InsufficientPrivilege:
+        # psycopg's message can quote SQL; name only the cause (nothing was rewrapped).
+        print(
+            "refused: the database role lacks a privilege rotation needs; nothing was changed"
+            " (run `parsemaxxing migrate` so the grants are current)",
+            file=sys.stderr,
+        )
+        return 4
+    except psycopg.Error as e:
+        print(f"refused: database error ({type(e).__name__}); nothing was changed", file=sys.stderr)
+        return 4
     print(f"rewrapped {n} data keys: KEK {old.id} -> {new.id}")
     print(f"now replace {current} with {new_file} (mode 0400), keep a backup, restart the engine")
     return 0
@@ -275,7 +296,9 @@ def import_env(env_file: Path, dry_run: bool) -> int:
         kek = None
     with db.connect(database_url()) as conn:
         try:
-            lines, removable, ok = config.import_v1_env(conn, values, kek, dry_run)
+            lines, removable, ok = config.import_v1_env(
+                conn, values, kek, dry_run, process_env=config.environ()
+            )
         except (VaultError, ValueError) as e:  # SettingsError is a ValueError
             print(f"refused: {e}", file=sys.stderr)
             return 4
@@ -289,9 +312,12 @@ def import_env(env_file: Path, dry_run: bool) -> int:
     return 0 if ok else 4
 
 
-def verify_ledger() -> int:
+def verify_ledger(expect_head: str | None = None) -> int:
+    if expect_head is not None and not db.HEAD.fullmatch(expect_head):
+        print("refused: --expect-head is <id>:<64 hex hash> (from `ledger head`)", file=sys.stderr)
+        return 4
     with db.connect(database_url()) as conn:
-        result = db.verify_ledger(conn)
+        result = db.verify_ledger(conn, expect_head=expect_head)
     for p in result["problems"]:
         print(f"  row {p['id']}: {p['problem']}")
     head = result["head"]
@@ -312,20 +338,24 @@ def backup_or_restore(args) -> int:
             if not args.yes:
                 print("refused: restore replaces objects in the target; add --yes", file=sys.stderr)
                 return 4
-            backup.restore(args.file, args.identity, args.target_dsn, config.environ())
-            print(f"restored {args.file.name}")
+            result = backup.restore(args.file, args.identity, args.target_dsn, config.environ())
+            print(f"restored {args.file.name}; ledger verified ({result['rows']} rows)")
             return 0
         dsn = database_url(admin=True)  # the owner sees every table
         with db.connect(dsn) as conn:
             recipient = SettingsService(conn, config.environ()).get(BackupSettings, PLATFORM)
+            head = db.ledger_head(conn)  # before the dump starts: the dump contains this row
         if not recipient.age_recipient:
             print("refused: set backup.age_recipient (an age public key) first", file=sys.stderr)
             return 4
-        path = backup.backup(dsn, recipient.age_recipient, args.out_dir, config.environ())
+        path = backup.backup(dsn, recipient.age_recipient, args.out_dir, config.environ(), head)
     except (backup.BackupError, OSError) as e:
         print(f"refused: {e}", file=sys.stderr)
         return 4
-    print(f"backup written: {path}")
+    except psycopg.Error as e:  # its message can quote SQL or connection details
+        print(f"refused: database error ({type(e).__name__})", file=sys.stderr)
+        return 4
+    print(f"backup written: {path} (+ .sha256); ledger head {head}")
     return 0
 
 

@@ -78,9 +78,9 @@ def test_bounds_and_unknown_fields_are_refused(svc):
 def test_group_definitions_are_checked():
     with pytest.raises(TypeError, match="bad env override"):
 
-        class _Bad(SettingsGroup):  # a secret value never comes from a variable
-            GROUP = "bad_secret_env"
-            key: str | None = setting(None, env="SOME_KEY", secret=True)
+        class _Bad(SettingsGroup):
+            GROUP = "bad_env_name"
+            key: str | None = setting(None, env="lower-case")
 
     with pytest.raises(TypeError, match="defined twice"):
 
@@ -168,6 +168,47 @@ def test_environment_variables_override_and_are_read_only(conn):
             svc.set(group, scope, values, actor="t")
     with pytest.raises(SettingsError, match="SPLUNK_PORT"):
         SettingsService(conn, environ={"SPLUNK_PORT": "nan"}).get(SplunkSettings, LAB)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://user:synthetic-pw-91c2@llm.example.com/v1",
+        "https://synthetic-user-only-91c2@llm.example.com/v1",
+        "https://:synthetic-pw-91c2@llm.example.com/v1",
+    ],
+)
+def test_url_settings_refuse_credentials_without_echoing_them(svc, conn, url):
+    """Adversarial: a credential in a URL setting would be stored and shown in clear."""
+    with pytest.raises(SettingsError) as e:
+        svc.set(LlmSettings, PLATFORM, {"base_url": url}, actor="t")
+    assert "base_url" in str(e.value) and "synthetic" not in str(e.value)
+    with pytest.raises(SettingsError) as e:
+        SettingsService(conn, environ={"LLM_BASE_URL": url}).get(LlmSettings, PLATFORM)
+    assert "LLM_BASE_URL" in str(e.value) and "synthetic" not in str(e.value)
+    assert svc.stored(LlmSettings, PLATFORM)[0].get("base_url") is None
+    svc.set(LlmSettings, PLATFORM, {"base_url": "https://llm.example.com/v1"}, actor="t")
+
+
+ENV_TOKEN = "synthetic-env-tok-0c4e"  # noqa: S105  # gitleaks:allow - synthetic
+
+
+def test_a_secret_variable_is_a_read_only_override_whose_value_is_never_read(svc, conn, vault):
+    ref = vault.put(LAB, "splunk.search_token", VALUE, "t")
+    svc.set(SplunkSettings, LAB, {"search_token": ref}, actor="t")
+    env = SettingsService(conn, environ={"SPLUNK_SEARCH_TOKEN": ENV_TOKEN})
+    e = env.explain(SplunkSettings, LAB)["search_token"]
+    assert (e.value, e.source, e.read_only, e.secret) == (True, "environment variable", True, True)
+    assert env.get(SplunkSettings, LAB).search_token == ref  # the value never enters settings
+    assert ENV_TOKEN not in repr(env.explain(SplunkSettings, LAB))
+    with pytest.raises(SettingsError, match="managed by environment variable SPLUNK_SEARCH_TOKEN"):
+        env.set(SplunkSettings, LAB, {"search_token": None}, actor="t")
+    # Unset and empty variables are not overrides: the vault id applies.
+    for environ in ({}, {"SPLUNK_SEARCH_TOKEN": ""}):
+        e = SettingsService(conn, environ).explain(SplunkSettings, LAB)["search_token"]
+        assert (e.value, e.source, e.read_only) == (True, "environment", False)
+    e = SettingsService(conn, {"LLM_API_KEY": "x"}).explain(LlmSettings, PLATFORM)["api_key"]
+    assert (e.value, e.source) == (True, "environment variable")  # set by the variable alone
 
 
 # --- secrets in settings --------------------------------------------------------------------------

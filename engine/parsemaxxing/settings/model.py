@@ -63,7 +63,9 @@ def setting(
 ) -> Any:
     """A setting field. `scopes`: the levels where it may be set (a lower level may override only
     if listed). `env`: a variable that, when present, overrides it everywhere and makes it read-only
-    ("managed by environment"). `secret`: the field holds a vault id (type `SecretRef | None`)."""
+    ("managed by environment"). `secret`: the field holds a vault id (type `SecretRef | None`);
+    its `env` variable, when set and non-empty, overrides the vault value at runtime (bootstrap
+    reads it; the settings service only reports the source and never reads the value)."""
     return Field(
         default,
         json_schema_extra={"pmx": {"scopes": scopes, "env": env, "secret": secret}},
@@ -90,8 +92,7 @@ class SettingsGroup(BaseModel):
             meta = cls.meta(name)
             if not meta["scopes"] or set(meta["scopes"]) - set(LEVELS):
                 raise TypeError(f"{cls.__name__}.{name}: scopes must be among {LEVELS}")
-            if meta["env"] and (meta["secret"] or not ENV_NAME.fullmatch(meta["env"])):
-                # secret values never come from variables; v1 values are imported into the vault
+            if meta["env"] and not ENV_NAME.fullmatch(meta["env"]):
                 raise TypeError(f"{cls.__name__}.{name}: bad env override")
         cls.registry[cls.GROUP] = cls
 

@@ -1,7 +1,9 @@
 """The settings service (design 7.5): resolve, change, history, snapshots, export and import.
 
 Resolution per field, lowest wins: default < platform < environment < client < environment
-variable. A stored value counts only at a level the field lists in `scopes`.
+variable. A stored value counts only at a level the field lists in `scopes`. A secret field's
+variable (set and non-empty) is reported as the source but its value is never read here: the
+vault id stays the resolved value and bootstrap uses the variable instead of the vault.
 """
 
 import hashlib
@@ -77,7 +79,9 @@ class SettingsService:
             secret = name in group.secret_fields()
             value = getattr(model, name)
             out[name] = Effective(
-                value=(value is not None) if secret else model.model_dump(mode="json")[name],
+                value=(value is not None or sources[name] == "environment variable")
+                if secret
+                else model.model_dump(mode="json")[name],
                 source=sources[name],
                 read_only=sources[name] == "environment variable",
                 secret=secret,
@@ -296,7 +300,7 @@ class SettingsService:
             meta = group.meta(name)
             if scope.level not in meta["scopes"]:
                 raise SettingsError(f"{group.GROUP}.{name} cannot be set for a {scope.level}")
-            if meta["env"] and meta["env"] in self.environ:
+            if self._env_active(group, name):
                 changes = (
                     (name in old) if name in unset else values[name] != old.get(name, _MISSING)
                 )
@@ -326,6 +330,15 @@ class SettingsService:
         if row is None:
             raise SettingsError(f"{where}: no such secret in this scope")
 
+    def _env_active(self, group: type[SettingsGroup], name: str) -> bool:
+        """A variable overrides the field: present (plain fields) or non-empty (secrets)."""
+        var = group.meta(name)["env"]
+        if not var:
+            return False
+        if name in group.secret_fields():
+            return bool(self.environ.get(var))
+        return var in self.environ
+
     def _resolve(
         self, group: type[G], scope: Scope, override: dict | None = None
     ) -> tuple[G, dict[str, Source]]:
@@ -340,9 +353,9 @@ class SettingsService:
                     values[name] = value
                     sources[name] = layer.level
         for name in group.model_fields:
-            var = group.meta(name)["env"]
-            if var and var in self.environ:
-                values[name] = self.environ[var]
+            if self._env_active(group, name):
+                if name not in group.secret_fields():  # a secret's value never enters here
+                    values[name] = self.environ[group.meta(name)["env"]]
                 sources[name] = "environment variable"
         try:
             return group.model_validate(values), sources
