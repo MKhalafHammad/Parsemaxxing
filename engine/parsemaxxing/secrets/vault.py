@@ -185,8 +185,17 @@ def _check_kek(conn: psycopg.Connection, kek: Kek, lock: str) -> None:
     """Refuse a KEK other than the one the vault is wrapped with; record it on first use."""
     row = conn.execute(_KEK_QUERY[lock]).fetchone()
     if row is None:
-        conn.execute("INSERT INTO vault_kek (kek_id) VALUES (%s)", (kek.id,))
-    elif not hmac.compare_digest(row["kek_id"], kek.id):
+        # Adopt a KEK only for an empty vault: secrets without a recorded KEK id mean a lost or
+        # removed row, and adopting would let any key "own" (and later rewrap) the vault.
+        if conn.execute("SELECT 1 FROM secrets LIMIT 1").fetchone():
+            raise VaultError("the vault holds secrets but no KEK id; refusing to adopt this KEK")
+        try:
+            with conn.transaction():  # a savepoint inside put/rotate
+                conn.execute("INSERT INTO vault_kek (kek_id) VALUES (%s)", (kek.id,))
+            return
+        except psycopg.errors.UniqueViolation:  # a concurrent first use recorded its KEK
+            row = conn.execute(_KEK_QUERY[lock]).fetchone()
+    if not hmac.compare_digest(row["kek_id"], kek.id):
         raise VaultError("this KEK is not the vault's KEK (wrong file, or rotated elsewhere)")
 
 
@@ -308,10 +317,11 @@ def rotate_kek(conn: psycopg.Connection, old: Kek, new: Kek, actor: str) -> int:
         raise VaultError("the new KEK is the current KEK")
     with conn.transaction():
         _check_kek(conn, old, "FOR UPDATE")
-        conn.execute("LOCK TABLE secrets IN EXCLUSIVE MODE")  # no write with the old KEK meanwhile
+        # vault_kek FOR UPDATE above blocks every put (it takes FOR SHARE first); the row locks
+        # cover any other writer. No LOCK TABLE: the app role has column-level UPDATE only.
         rows = conn.execute(
             "SELECT id, environment, client, name, version, dek_nonce, wrapped_dek FROM secrets"
-            " ORDER BY id"
+            " ORDER BY id FOR UPDATE"
         ).fetchall()
         for row in rows:
             scope = Scope(row["environment"], row["client"])

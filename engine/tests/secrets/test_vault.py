@@ -5,6 +5,8 @@ import base64
 import logging
 import os
 import pickle
+import threading
+import time
 
 import psycopg
 import pytest
@@ -12,6 +14,7 @@ import pytest
 from parsemaxxing.cli import main as cli_main
 from parsemaxxing.ledger import store as db
 from parsemaxxing.secrets import Kek, Vault, VaultError, kek_file, rotate_kek
+from parsemaxxing.secrets.vault import _check_kek
 from parsemaxxing.settings import PLATFORM, Scope
 
 VALUE = "synthetic-secret-value-7f3a9c"  # synthetic test value, not a real credential
@@ -295,6 +298,122 @@ def test_cli_rotate_kek(conn, kek, tmp_path, monkeypatch, capsys, pg_dsn):
     )
     out = capsys.readouterr()
     assert "readable by group or others" in out.err and VALUE not in out.out + out.err
+
+
+def test_rotate_kek_as_the_app_role(conn, kek, tmp_path, pg_dsn):
+    """The deployed CLI connects as parsemaxxing_app (column-level UPDATE, no table lock)."""
+    vault = Vault(conn, kek)
+    sid = vault.put(LAB, "tok", VALUE, actor="t")
+    new = Kek.load(write_kek(tmp_path / "new"))
+    app = db.connect(pg_dsn)
+    app.execute("SET ROLE parsemaxxing_app")
+    try:
+        assert rotate_kek(app, kek, new, actor="t") == 1
+        with Vault(app, new).use(sid, LAB) as p:
+            assert p.text() == VALUE
+    finally:
+        app.close()
+
+
+def test_rotation_waits_for_a_running_put_and_refuses_its_old_kek_after(
+    conn, kek, tmp_path, pg_dsn
+):
+    """vault_kek FOR UPDATE (rotate) against FOR SHARE (put): no DEK is wrapped with the old KEK
+    after the rotation commits."""
+    sid = Vault(conn, kek).put(LAB, "tok", VALUE, actor="t")
+    new = Kek.load(write_kek(tmp_path / "new"))
+    rot = db.connect(pg_dsn)
+    done = []
+    try:
+        with conn.transaction():
+            _check_kek(conn, kek, "FOR SHARE")  # a put in progress
+            t = threading.Thread(target=lambda: done.append(rotate_kek(rot, kek, new, "t")))
+            t.start()
+            _wait_for_lock_wait(conn)
+            assert done == []  # rotation waits for the put
+        t.join(10)
+        assert done == [1]
+        with pytest.raises(VaultError, match="not the vault's KEK"):
+            Vault(conn, kek).put(LAB, "tok", VALUE, actor="t")
+        with Vault(conn, new).use(sid, LAB) as p:
+            assert p.text() == VALUE
+    finally:
+        rot.close()
+
+
+def test_cli_rotate_kek_reports_a_missing_grant_without_sql(
+    conn, tmp_path, monkeypatch, capsys, pg_dsn
+):
+    import parsemaxxing.secrets as secrets
+
+    def denied(*a, **k):
+        raise psycopg.errors.InsufficientPrivilege(
+            "permission denied for table secrets DETAIL: synthetic-sql-detail"
+        )
+
+    monkeypatch.setattr(secrets, "rotate_kek", denied)
+    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+    monkeypatch.setenv("PARSEMAXXING_KEK_FILE", str(write_kek(tmp_path / "old")))
+    argv = ["--env-file", str(tmp_path / "none.env"), "secrets", "rotate-kek", "--new-kek-file"]
+    assert cli_main([*argv, str(write_kek(tmp_path / "new"))]) == 4
+    out = capsys.readouterr()
+    assert "lacks a privilege" in out.err and "nothing was changed" in out.err
+    assert "synthetic-sql-detail" not in out.out + out.err and "Traceback" not in out.err
+
+
+# --- first use of a KEK (adversarial) --------------------------------------------------------
+
+
+def _wait_for_lock_wait(conn):
+    for _ in range(100):
+        if conn.execute("SELECT 1 FROM pg_locks WHERE NOT granted").fetchone():
+            return
+        time.sleep(0.05)
+    raise AssertionError("the other session never waited")
+
+
+def test_a_kek_is_not_adopted_by_a_vault_that_has_secrets(conn, kek, tmp_path):
+    sid = Vault(conn, kek).put(LAB, "tok", VALUE, actor="t")
+    conn.execute("DELETE FROM vault_kek")  # owner: the KEK id row is lost
+    other = Kek.load(write_kek(tmp_path / "other"))
+    new = Kek.load(write_kek(tmp_path / "new"))
+    for k in (other, kek):  # even the right KEK: the id is gone, nothing proves it
+        with pytest.raises(VaultError, match="no KEK id"):
+            Vault(conn, k).put(LAB, "tok2", VALUE, actor="t")
+        with pytest.raises(VaultError, match="no KEK id"), Vault(conn, k).use(sid, LAB):
+            pass
+        with pytest.raises(VaultError, match="no KEK id"):
+            rotate_kek(conn, k, new, actor="t")
+    assert conn.execute("SELECT count(*) AS n FROM vault_kek").fetchone()["n"] == 0
+
+
+@pytest.mark.parametrize("same", [True, False])
+def test_concurrent_first_use_keeps_one_kek(conn, kek, tmp_path, pg_dsn, same):
+    second = kek if same else Kek.load(write_kek(tmp_path / "other"))
+    other = db.connect(pg_dsn)
+    result = []
+
+    def first_use():
+        try:
+            Vault(other, second).put(LAB, "b", VALUE, actor="t")
+            result.append("ok")
+        except VaultError as e:
+            result.append(str(e))
+
+    try:
+        with conn.transaction():
+            _check_kek(conn, kek, "FOR SHARE")  # records kek, not committed yet
+            t = threading.Thread(target=first_use)
+            t.start()
+            _wait_for_lock_wait(conn)
+        t.join(10)
+    finally:
+        other.close()
+    assert result == (
+        ["ok"] if same else ["this KEK is not the vault's KEK (wrong file, or rotated elsewhere)"]
+    )
+    (row,) = conn.execute("SELECT kek_id FROM vault_kek").fetchall()
+    assert row["kek_id"] == kek.id
 
 
 # --- leakage scan ----------------------------------------------------------------------------
