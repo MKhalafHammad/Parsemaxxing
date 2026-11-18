@@ -22,7 +22,7 @@ from fastapi import Path as PathParam
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from parsemaxxing import config
@@ -112,7 +112,10 @@ def create_app(
         # Field locations only: Pydantic's messages can echo the submitted value.
         fields = sorted({".".join(str(p) for p in e["loc"][1:]) or "body" for e in exc.errors()})
         # Logged without the input either: a refused body may hold a secret.
-        problems = [(e["loc"], e["type"]) for e in exc.errors()]
+        # repr: a loc entry can be a client-chosen key (an extra field) holding a newline.
+        problems = "; ".join(
+            f"{'.'.join(repr(p) for p in e['loc'])} {e['type']}" for e in exc.errors()
+        )
         log.info("request %s invalid: %s", _request_id(request), problems)
         return error(422, f"invalid request: {', '.join(fields)}", _request_id(request))
 
@@ -133,8 +136,10 @@ def create_app(
                 return error(403, "cross-site request refused", rid)
         try:
             response = await call_next(request)
-        except Exception:
-            log.exception("request %s failed", rid)
+        except Exception as exc:  # noqa: BLE001 - every error becomes the 500 envelope
+            # The type only: a traceback or message can quote SQL, psycopg DETAIL (row values)
+            # or a path.
+            log.error("request %s failed: %s", rid, type(exc).__name__)
             return error(500, "internal error", rid)
         response.headers.update(SECURITY_HEADERS)
         response.headers[REQUEST_ID] = rid
@@ -239,6 +244,8 @@ def create_app(
         return [_event(e) for e in store.events(job, after)]
 
     class Corrections(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
         vendor: str | None = Field(None, max_length=40)
         product: str | None = Field(None, max_length=40)
         sourcetype: str | None = Field(None, max_length=80)
@@ -267,6 +274,8 @@ def create_app(
         return {"job": job, "status": "queued"}
 
     class Approval(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
         sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @app.post("/runs/{job}/approve")
@@ -335,6 +344,8 @@ def create_app(
     # --- operator ------------------------------------------------------------------------
 
     class Kill(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
         on: bool
 
     @app.get("/admin/status")

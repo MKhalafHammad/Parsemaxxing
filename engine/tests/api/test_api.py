@@ -429,19 +429,31 @@ def test_unexpected_errors_are_generic_and_logged(client, monkeypatch, caplog):
     from parsemaxxing.ledger import store as db
 
     def boom(self, limit=100):
-        raise RuntimeError("SELECT secret FROM /srv/internal/path")
+        raise RuntimeError("SELECT secret FROM /srv/internal/path DETAIL: Key (x)=(row-value)")
 
     monkeypatch.setattr(db.Store, "jobs", boom)
     r = client.get("/runs")
     err = _envelope(r, 500, "internal_error")
     assert err["message"] == "internal error"
     assert "SELECT" not in r.text and "/srv" not in r.text and "Traceback" not in r.text
-    assert err["request_id"] in caplog.text and "SELECT secret" in caplog.text
+    assert err["request_id"] in caplog.text and "RuntimeError" in caplog.text
+    # The log carries the type only: no message, traceback, SQL, DETAIL values or paths.
+    for leak in ("SELECT secret", "row-value", "/srv", "Traceback"):
+        assert leak not in caplog.text
 
 
 def test_body_limit_refusal_uses_the_envelope(client):
     r = client.post("/uploads", content=b"x", headers={"Content-Length": str(api.MAX_BODY + 1)})
     _envelope(r, 413, "payload_too_large")
+
+
+def test_validation_logs_quote_client_chosen_field_names(client, caplog):
+    """Adversarial: an extra field named with a newline cannot forge a log line."""
+    caplog.set_level("INFO", logger="parsemaxxing.api")
+    r = client.post("/admin/kill", json={"on": True, "x\nINFO forged line": 1})
+    _envelope(r, 422, "invalid_request")
+    (record,) = [m for m in caplog.messages if "invalid" in m]
+    assert "\n" not in record and "'x\\nINFO forged line'" in record
 
 
 def test_validation_logs_never_hold_the_submitted_value(client, caplog):
