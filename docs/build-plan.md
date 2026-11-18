@@ -23,7 +23,7 @@ Updated at the end of every phase.
 | 10 | One-command Docker setup, README, scenario scripts | Nov 3 | Done (clean-VM test passed; image digests deferred, R12) | Nov 4 |
 | 11 | Foundation: tag, rename, licence, cleanup, v2 design and security docs, lab probes | — | In progress | |
 | 12 | Hardened runtime, settings store and vault | — | Built, in review (deferred items listed in the phase) | |
-| 13 | Authentication and RBAC | — | Planned | |
+| 13 | Authentication and RBAC | — | Built, in review (deferred items listed in the phase) | |
 | 14 | LDAP | — | Planned | |
 | 15 | App shell and UX architecture | — | Planned | |
 | 16 | LLM providers and per-agent models | — | Planned | |
@@ -869,6 +869,23 @@ Each phase builds the design sections it names in [design.md](design.md#v2-platf
 
 **Goal:** nobody reaches the platform without logging in, every route has a role, and every security-relevant action is audited (7.3).
 **Owners:** `identity` (auth), `engine` (route policy, CLI through the API), `frontend` (login, MFA, tokens screens).
+
+### Status (Nov 19, 2026: built, in review)
+
+| Deliverable | Status |
+| --- | --- |
+| Local users, Argon2id, common-password list, lockout | Built. The list is the project's own, 672 entries (smaller than a published top-10k list). 5 failures per user name, 20 per IP, 60 s doubling to 900 s |
+| TOTP MFA, recovery codes, "require MFA for admins" | Built: on by default, replay guard, 10 single-use codes. No QR code at enrolment (Phase 15); Reset MFA from the UI deferred (Phase 15; `parsemaxxing admin reset` today) |
+| Sessions and cookie | Built: `__Host-pmx_session`, idle 30 min and absolute 12 h as settings, rotation, revocation, sign out everywhere. The idle-timeout warning banner is deferred and must ship with the Phase 15 shell (WCAG 2.2.1) |
+| `Origin` check | Built against the `WEB_ORIGINS` list, plus `X-Parsemaxxing: 1` |
+| API tokens, CLI through the API, break-glass | Built: `pmxt_`, hashed, 1 to 90 days, role at most the creator's, effective role the lower of token and owner, revoked on password change, role change, disable and admin reset. `run`, `update`, `approve`, `reject`, `promote`, `rollback` and `kill` use the API, so `run`, `update` and `promote` need `serve` running. New admin route `POST /tas/{app}/rollback` (sandbox only; production needs Phase 18's approval rule) |
+| Setup token | Built: one token across engine workers; `make setup-token` issues a new one |
+| Route policy, `auth_events`, audit log screen | Built: checked at startup and in tests; `auth_events` hash-chained and checked by `ledger verify`; the audit log is readable by viewers (7.3) and shows sign-in IPs (owner decision to confirm, threat model R24). Unlock route deferred (Phase 15) |
+| `jobs.created_by` | Built |
+| Screens | Built: sign in, MFA, recovery code, setup, MFA enrolment, account security, API tokens, users, audit log, `<AdminOnly>`. UX review must-fixes (Turn off MFA hidden while MFA is required, "Sign in as someone else" on the MFA, recovery and enrolment steps, times with a named zone) are in the working tree; the kill-switch control is Phase 16 |
+| Trusted proxy | Built: the engine trusts `X-Forwarded-For` only from the web container; the web container forwards it only when the `https` proxy's `X-Pmx-Hop` secret matches |
+| Exposure beyond localhost | Not lifted: `make up` still refuses a non-loopback `HTTPS_BIND` until Phase 14 |
+| End-to-end test against a real engine | Deferred: the Playwright tests mock the engine |
 
 ### Deliverables
 - Local users with Argon2id, common-password list, lockout with backoff per account and IP.

@@ -1,6 +1,6 @@
 # Setup
 
-Every step from an empty machine to an approved add-on, then configuration, usage, tests and troubleshooting. Steps 1 to 7 were tested on a fresh Ubuntu 26.04 VM with v1; the Phase 12 additions (Docker secrets, the KEK, settings import, backups, the `https` profile) are described from the code and its tests. The commands are for Ubuntu; on other systems, install the same tools your usual way.
+Every step from an empty machine to an approved add-on, then configuration, usage, tests and troubleshooting. Steps 1 to 7 were tested on a fresh Ubuntu 26.04 VM with v1; the Phase 12 additions (Docker secrets, the KEK, settings import, backups, the `https` profile) and the Phase 13 additions (the first admin, sign-in, MFA, API tokens) are described from the code and its tests. The commands are for Ubuntu; on other systems, install the same tools your usual way.
 
 A first-run setup wizard in the web UI is **planned** (Phase 15). Until then, setup is the command line below.
 
@@ -13,6 +13,8 @@ A first-run setup wizard in the web UI is **planned** (Phase 15). Until then, se
 - [Step 4: Add the Splunk CIM add-on](#step-4-add-the-splunk-cim-add-on)
 - [Step 5: Start everything](#step-5-start-everything)
 - [Back up the KEK](#back-up-the-kek)
+- [Create the first admin](#create-the-first-admin)
+- [API token for the CLI](#api-token-for-the-cli)
 - [Step 6: Start the first run](#step-6-start-the-first-run)
 - [Step 7: Review and approve](#step-7-review-and-approve)
 - [Messages that are safe to ignore](#messages-that-are-safe-to-ignore)
@@ -149,7 +151,7 @@ make up
 
 This takes about 15 minutes the first time, mostly Splunk's first start. Always use `make up` rather than `docker compose up`, because it also prepares Splunk:
 
-1. It creates `.env` if missing, and the Docker secrets in `secrets/` if missing: the KEK (`secrets/pmx_kek`) and the two database passwords, each owned by uid 10001 with mode 0400 (`make secrets` does the same on its own). It never overwrites one.
+1. It creates `.env` if missing, and the Docker secrets in `secrets/` if missing: the KEK (`secrets/pmx_kek`) and the two database passwords, each owned by uid 10001 with mode 0400, and `secrets/pmx_proxy_hop` (the `https` proxy's header secret), owned by uid 1000 (the web container's user) with mode 0400. `make secrets` does the same on its own. It never overwrites one.
 1. It starts Splunk and PostgreSQL and waits until they are healthy.
 2. It creates the `pmx_test` index and three least-privilege service accounts (search, deploy, drift).
 3. It installs the CIM add-on, restarts Splunk, and points the add-on's index macros at `pmx_*`.
@@ -165,7 +167,15 @@ Parsemaxxing is up.
 First run:     make first-run
 ```
 
-`make up` is safe to run again at any point, and it continues from where it stopped.
+While no admin account exists, it also prints:
+
+```text
+Setup needed: no admin account exists yet.
+  1. make setup-token   (prints a one-time token, valid 60 minutes)
+  2. open http://localhost:3000 and create the first admin with that token
+```
+
+Do that now: [Create the first admin](#create-the-first-admin). `make up` is safe to run again at any point, and it continues from where it stopped.
 
 ## Back up the KEK
 
@@ -190,6 +200,43 @@ make secrets && make up                                   # hands the new file t
 
 A first engine start against an empty vault adopts whatever KEK it is given, so if you restore a database onto a new server, put the matching KEK in `secrets/pmx_kek` before the first `make up` there.
 
+## Create the first admin
+
+There are no default accounts. The first admin is created with a one-time setup token.
+
+1. Run `make setup-token`. It prints a new token, valid for 60 minutes and usable once. Every run of it replaces the previous token. The engine also keeps the token in `/app/.runs/setup-token` inside its container (mode 0600) and logs only that path.
+2. Open http://localhost:3000. With no admin yet, the UI opens the setup page.
+3. Paste the token, choose a user name and a password (12 to 128 characters; common passwords are refused), and create the admin.
+4. Enrol MFA: add the key shown on the page to an authenticator app (there is no QR code yet, Phase 15), then enter the 6-digit code. Admins must use MFA by default.
+5. **Save the 10 recovery codes now, somewhere off this server (a password manager).** Each works once, in place of an authenticator code. They are shown only once.
+
+Use Chromium, Chrome, Edge or Firefox on this machine. They treat `http://localhost` as a secure context, so the `__Host-pmx_session` cookie works over plain http. Safari does not keep it; use the [`https` profile](#https) with Safari.
+
+Other users: an admin adds them under **Users** (`/settings/users`) with a temporary password. Each user manages their own password, MFA, recovery codes and sessions under **Account security** (`/me/security`). The **Audit log** (`/settings/audit-log`) lists every sign-in, failure, lockout, MFA, user, role and token change, approval, rollback and kill-switch use, with the client IP; admins and viewers can read it, nobody can edit it.
+
+**Lost access** (forgotten password, or lost authenticator and recovery codes): someone with the database owner credentials (`POSTGRES_PASSWORD` in `.env`) runs the break-glass reset on the host, with the `cli` profile up:
+
+```bash
+docker compose --profile cli up -d postgres-cli
+.venv/bin/parsemaxxing admin reset <user name>
+```
+
+It asks for a new password twice without echo, clears MFA (the user enrols again at the next sign-in), enables and unlocks the account, revokes all of its sessions and API tokens, and writes an audit row. Reset MFA and Unlock from the Users screen are planned (Phase 15).
+
+## API token for the CLI
+
+`run`, `update`, `approve`, `reject`, `promote`, `rollback` and `kill` go through the engine API with an API token, so they get the same role checks and audit rows as the UI. `run`, `update` and `promote` also need the engine running (`make up`, or `parsemaxxing serve` and `parsemaxxing worker`). `run --local` uses neither the API nor PostgreSQL.
+
+1. In the UI, open **API tokens** (`/settings/api-tokens`) and create a token: a name (for example `cli`), the role `admin` (these commands need it), and an expiry of 1 to 90 days.
+2. Copy the `pmxt_...` value. It is shown once.
+3. Give it to the CLI in one of two ways. Never put it on the command line or in `.env`:
+   - a file only you can read: `install -m 600 /dev/null ~/.pmx-token`, paste the token into it with an editor, then pass `--token-file ~/.pmx-token` (the file must be mode 0600 or 0400 and not a link);
+   - or `export PARSEMAXXING_API_TOKEN=<your token>` in your shell.
+
+The CLI talks to `PARSEMAXXING_API_URL` (default `http://127.0.0.1:8080`). Plain http is allowed only for `localhost`, `127.0.0.1`, `::1` or `engine`; any other host needs https. A token stops working when it expires, when it is revoked, and when its owner's password or role changes or the owner is disabled or reset. A token never has a higher role than its owner has now.
+
+`make first-run` and the `demo/` scripts send the token from `PARSEMAXXING_API_TOKEN`: `export PARSEMAXXING_API_TOKEN=$(cat ~/.pmx-token)` first.
+
 ## Step 6: Start the first run
 
 Sample logs come with the repository, in `engine/parsemaxxing/generator/fixtures/`. All of them are synthetic, with 300 events each:
@@ -208,11 +255,11 @@ Ignore the `.manifest.json` files: they are answer keys, and you don't need to u
 3. Check what the Profiler found on the profile review screen, then click **Confirm profile**.
 4. Watch the agents work. Each attempt is deployed to Splunk and checked. The run takes a few minutes and stops at **Awaiting approval**.
 
-**Or from the terminal:** `make first-run` uploads the same VPN log, skips the profile review and follows the run. If you use it, choose a different file for your next run in the UI, because uploading the same log opens the existing run.
+**Or from the terminal:** `.venv/bin/parsemaxxing run engine/parsemaxxing/generator/fixtures/acme_vpn.json --token-file ~/.pmx-token` ([API token for the CLI](#api-token-for-the-cli)). `make first-run` uses the same token from `PARSEMAXXING_API_TOKEN`. Uploading the same log twice opens the existing run.
 
 ## Step 7: Review and approve
 
-A human approves every add-on before it is promoted, so this last step is yours.
+A human approves every add-on before it is promoted, so this last step is yours. Approve, reject and New run need the `admin` role; viewers see them disabled with "Admin only".
 
 1. Open the run's page from Step 6, or start at http://localhost:3000.
 2. Review raw vs parsed events and the configuration.
@@ -223,7 +270,7 @@ The run ends as `done`, and the add-on appears in the TA registry.
 Splunk Web is at http://localhost:8000 (user `admin`, password `SPLUNK_PASSWORD` from `.env`).
 
 > [!IMPORTANT]
-> **The web UI and Splunk Web open only on the machine running Parsemaxxing, not from another machine.** This is a security choice: the UI has no login, so every port is bound to `127.0.0.1`, and the UI accepts only `localhost:3000` and `127.0.0.1:3000` (plus the `https` profile's host name, [HTTPS](#https)). Use a browser on that same machine.
+> **The web UI and Splunk Web open only on the machine running Parsemaxxing, not from another machine.** This is a security choice: sign-in and roles are built (Phase 13), but exposure beyond localhost waits for the Phase 14 hardening, so every port is bound to `127.0.0.1`, and the UI accepts only `localhost:3000` and `127.0.0.1:3000` (plus the `https` profile's host name, [HTTPS](#https)). Use a browser on that same machine.
 
 ## Messages that are safe to ignore
 
@@ -288,7 +335,7 @@ LLM_API_KEY=<key your server expects, or any placeholder if none>
 
 Nothing else changes, and sample logs never leave your network. Put the key in `LLM_API_KEY`, never in the URL: a base URL with a user name or password (`https://user:pass@...`) is refused. If you already imported your `.env` into the settings store, run the import again after the change ([Settings and secrets](#settings-and-secrets)).
 
-**Serving the UI on the network, outside Docker.** Start the UI with `HOSTNAME=0.0.0.0` (set it explicitly: shells often set `HOSTNAME` to the machine's name) and add the server's address to `ALLOWED_HOSTS` and `WEB_ORIGINS` (see the note at the end of [.env.example](../.env.example)), then open the port in the server's firewall. With firewalld, `sudo firewall-cmd --add-port=3000/tcp --permanent` changes only the saved rules: run `sudo firewall-cmd --reload` to apply them. The UI has no login, so anyone who can reach that port can use it.
+**Serving the UI on the network, outside Docker.** Start the UI with `HOSTNAME=0.0.0.0` (set it explicitly: shells often set `HOSTNAME` to the machine's name) and add the server's address to `ALLOWED_HOSTS` and `WEB_ORIGINS` (see the note at the end of [.env.example](../.env.example)), then open the port in the server's firewall. With firewalld, `sudo firewall-cmd --add-port=3000/tcp --permanent` changes only the saved rules: run `sudo firewall-cmd --reload` to apply them. Every route needs a sign-in, but exposure beyond localhost is not supported before Phase 14, and over plain http on a host name other than `localhost` browsers drop the `__Host-` session cookie: use https there.
 
 ## Settings and secrets
 
@@ -330,7 +377,7 @@ age-keygen -o pmx-backup.key        # keep this file off the server; it prints t
 | `make backup` | `pg_dump` of the database, piped into `age` in a container with no network, written to `backups/pmx-<UTC time>.dump.age` (folder 0700, file 0600) | `secrets/backup_recipients.txt` (yours to create and read), one `age1...` key per line, or the file named by `PMX_BACKUP_RECIPIENTS` |
 | `parsemaxxing backup [--out-dir backups]` (engine CLI, with the `cli` profile up) | The same dump, from the host | The setting `backup.age_recipient`, or `PARSEMAXXING_BACKUP_RECIPIENT` |
 
-`make up` and `make secrets` change only their own three files in `secrets/` (`pmx_kek`, `postgres_password`, `postgres_app_password`); `backup_recipients.txt` stays yours.
+`make up` and `make secrets` change only their own four files in `secrets/` (`pmx_kek`, `postgres_password`, `postgres_app_password`, `pmx_proxy_hop`); `backup_recipients.txt` stays yours.
 
 Each backup gets a `<backup>.sha256` file beside it (0600). Line 1 is in `sha256sum` format (the SHA-256 of the encrypted file and its name), line 2 is `ledger-head <id>:<hash>`, the newest ledger row at backup time. Keep the two together: a restore refuses a backup without its checksum file, or one that does not match it. Someone who can rewrite both files can change the recorded head too, so also keep a head off the server ([Ledger check](#settings-and-secrets)). The backup tools give `pg_dump`, `pg_restore` and `age` only a minimal environment (`PATH`, `HOME`, `LANG` and the `PG*` connection values), never the engine's other variables.
 
@@ -356,10 +403,10 @@ The optional `https` profile puts Caddy in front of the web UI with TLS and HSTS
 | `COMPOSE_PROFILES` | unset | `https` turns the proxy on |
 | `PMX_PUBLIC_HOST` | `localhost` | The host name the browser uses; the web UI accepts it with and without the port |
 | `HTTPS_PORT` | `8443` | The published port |
-| `HTTPS_BIND` | `127.0.0.1` | The host address it listens on. The UI has no login yet (Phase 13), so `make up` refuses any address other than loopback unless you also set `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes` in your shell to accept that risk |
+| `HTTPS_BIND` | `127.0.0.1` | The host address it listens on. Sign-in is built (Phase 13), but exposure beyond localhost waits for the Phase 14 hardening, so `make up` refuses any address other than loopback unless you also set `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes` in your shell to accept that risk |
 | `PMX_TLS` | `internal` | `internal` (Caddy's own CA, kept in the `caddy-data` volume; browsers warn until you trust it) or `/certs/<cert>.pem /certs/<key>.pem` for your own certificate in `./certs` |
 
-Then `make up` and open `https://<PMX_PUBLIC_HOST>:8443`.
+Then `make up` and open `https://<PMX_PUBLIC_HOST>:8443`. The engine and the web UI accept state changes only from the origins docker-compose puts in `WEB_ORIGINS` (`http://localhost:3000`, `http://127.0.0.1:3000` and `https://<PMX_PUBLIC_HOST>` with and without `:8443`). Caddy sends the `pmx_proxy_hop` secret as `X-Pmx-Hop` and replaces any value a client sends, so the web UI passes the client's address on to the engine (for lockout per IP and the audit log) only for requests that came through Caddy.
 
 ## Usage
 
@@ -371,11 +418,11 @@ Then `make up` and open `https://<PMX_PUBLIC_HOST>:8443`.
 
 **CLI**
 ```bash
-.venv/bin/parsemaxxing run engine/parsemaxxing/generator/fixtures/acme_vpn.json --vendor acme --product vpn
-.venv/bin/parsemaxxing update TA-parsemaxxing-acme-fw new_format.log
-.venv/bin/parsemaxxing approve <job> --sha256 <hash> && .venv/bin/parsemaxxing promote <job>
+.venv/bin/parsemaxxing run engine/parsemaxxing/generator/fixtures/acme_vpn.json --vendor acme --product vpn --token-file ~/.pmx-token
+.venv/bin/parsemaxxing update TA-parsemaxxing-acme-fw new_format.log --token-file ~/.pmx-token
+.venv/bin/parsemaxxing approve <job> --sha256 <hash> --token-file ~/.pmx-token && .venv/bin/parsemaxxing promote <job> --token-file ~/.pmx-token
 ```
-The CLI runs the same pipeline headless against the Splunk in `.env` and prints each attempt, check and the CIM score.
+These commands go through the engine API with an admin API token ([API token for the CLI](#api-token-for-the-cli)); `run`, `update` and `promote` wait for the engine's workers and print each attempt, check and the CIM score. A refusal prints the engine's message and request id and exits with code 4. `status`, `tas` and the host-only commands (`migrate`, `admin reset`, `setup-token`, `secrets rotate-kek`, `settings import-env`, `ledger verify`, `backup`, `restore`) use the database directly. `run --local` runs the pipeline without API and database.
 
 ## Running tests and security checks
 
@@ -388,6 +435,7 @@ make security  # bandit, semgrep, pip-audit, npm audit, gitleaks over full git h
 | Other targets | Does |
 | --- | --- |
 | `make secrets` | Create `.env` and the Docker secrets in `secrets/` if missing (needs Docker) |
+| `make setup-token` | Print a new one-time setup token from the running engine ([Create the first admin](#create-the-first-admin)) |
 | `make e2e` | Web build and Playwright end-to-end tests only |
 | `make lock` | Regenerate `engine/requirements.lock` with hashes, from releases older than `BEFORE` (default 2026-11-04); needs `uv` |
 | `make digests` | Show where each pinned image tag points now; `make digests WRITE=1` updates the files |
@@ -422,6 +470,7 @@ CI runs `make lint`, `make test` and `make security` on every pull request and o
 │   │   ├── ledger/          PostgreSQL job queue, append-only hash-chained ledger, encrypted backups (built)
 │   │   ├── settings/        typed, versioned settings with history and import (built)
 │   │   ├── secrets/         the vault: AES-256-GCM envelope encryption under the KEK (built)
+│   │   ├── auth/            local accounts, sessions, MFA, API tokens, route policy, audit (built; LDAP planned)
 │   │   ├── cim_spec/        CIM 8.7.0 required fields and allowed values, pinned from Splunk_SA_CIM (built)
 │   │   └── generator/       synthetic logs in four formats + truth manifests; fixtures/ (built)
 │   └── tests/               engine tests
@@ -430,7 +479,7 @@ CI runs `make lint`, `make test` and `make security` on every pull request and o
 │                            lab-findings.md, build-plan.md, build-log.md, knowledge-sources.md
 ├── scripts/                 one-command setup (up.sh, Splunk bootstrap, make_secrets.py), backups,
 │                            image checks, the TCP relay, the Caddyfile, first run, commit-msg hook
-├── secrets/                 Docker secrets: KEK and database passwords (git-ignored, made by make secrets)
+├── secrets/                 Docker secrets: KEK, database passwords, proxy hop secret (git-ignored, made by make secrets)
 ├── lab/                     licensed add-ons you download (CIM); git-ignored packages
 ├── demo/                    repeatable scenario scripts
 ├── tests/                   repo tooling tests
@@ -460,6 +509,11 @@ CI runs `make lint`, `make test` and `make security` on every pull request and o
 - **`refused:` from `rotate-kek` or `import-env` about the KEK.** The KEK file must be a regular file with no group or other permissions, one line of base64 of 32 bytes. Run the command with `sudo` and `PARSEMAXXING_KEK_FILE=secrets/pmx_kek`. A KEK that does not match the vault is refused: use the one you backed up.
 - **The host CLI cannot reach PostgreSQL.** It is published only with the `cli` profile: `docker compose --profile cli up -d postgres-cli`.
 - **`no backup recipients` or `not an age public key`.** Put your `age1...` public key in the recipients file ([Backups](#backups)).
+- **The setup page says the token is not valid.** Tokens last 60 minutes and work once. Run `make setup-token` for a new one.
+- **Signing in returns to the sign-in page.** The browser dropped the `__Host-pmx_session` cookie. Safari does this on plain `http://localhost`, and every browser does it on plain http with another host name: use Chromium, Chrome, Edge or Firefox on `http://localhost:3000`, or the [`https` profile](#https).
+- **"Too many attempts. Try again in N minutes."** 5 failures for one user name, or 20 from one IP, lock sign-in for 60 seconds, doubling up to 15 minutes. Wait, or clear it with `parsemaxxing admin reset <user name>` ([Create the first admin](#create-the-first-admin)). Anyone can lock a known user name this way for up to 15 minutes (threat model R23).
+- **`no API token: set PARSEMAXXING_API_TOKEN or pass --token-file`.** Create a token ([API token for the CLI](#api-token-for-the-cli)). A token file readable by group or others, or a link, is refused.
+- **`make first-run` or a `demo/` script fails with HTTP 401 or asks for `PARSEMAXXING_API_TOKEN`.** Create an admin API token under Settings > API tokens, save it with mode 0600, and `export PARSEMAXXING_API_TOKEN=$(cat ~/.pmx-token)`.
 - **Meta API errors:**
   - 401/403: check `LLM_API_KEY`.
   - 404: check `LLM_BASE_URL` and `LLM_MODEL`.
