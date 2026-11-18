@@ -12,7 +12,7 @@ First built during the Meta Global AI Developer Hackathon (October–November 20
 - `engine/`: Python 3.12, FastAPI, Pydantic, PostgreSQL (job queue, ledger, registry), `splunk-sdk` (REST :8089, token auth), `openai` SDK, `regex` for `test_regex`. Conventions: [engine/CLAUDE.md](engine/CLAUDE.md).
 - Planned for v2 (each gets a line in the design doc's tech stack table when it lands): `ldap3`, `argon2-cffi`, `pyotp` (Phases 13–14), `cryptography` (vault, Phase 12), `anthropic` (Phase 16), `pgvector`, `fastembed` (Phase 20), the relay SSH library chosen in Phase 11 (Q18), the chart library chosen by `frontend` (Q19).
 - `web/`: Next.js + shadcn/ui, live updates over server-sent events from FastAPI. Conventions: [web/CLAUDE.md](web/CLAUDE.md).
-- Runtime LLM: today configured only through `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY`; never hardcode them. Planned (Phase 16): any provider and model per agent, configured in the settings service, keys in the vault.
+- Runtime LLM: the `llm` settings group (base URL, model) and a vault secret for the API key; `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY` still work as read-only overrides and the v1 fallback. Never hardcode them. Planned (Phase 16): any provider and model per agent.
 - Local stack: `docker-compose.yml` (Splunk Enterprise sandbox, PostgreSQL, engine, web), values from `.env`. Supported Splunk Enterprise: 10.2 and later; Splunk Cloud is out of scope.
 
 ## Layout
