@@ -4,6 +4,7 @@ Every query is parameterised. Every state change is `UPDATE ... WHERE status = <
 with the row count checked, so a replayed or racing request changes nothing.
 """
 
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -30,12 +31,36 @@ LLM_SLOT_BASE = 7100
 GENESIS = "0" * 64  # prev_hash of the first ledger row (migration 006, section 5)
 
 
-def verify_ledger(conn: psycopg.Connection, batch: int = 5000, cap: int = 100) -> dict:
+def ledger_head(conn: psycopg.Connection) -> str:
+    """The newest ledger row as `<id>:<hash>` (an anchor for `ledger verify --expect-head`);
+    `-1:<GENESIS>` for an empty ledger."""
+    row = conn.execute("SELECT id, hash FROM ledger ORDER BY id DESC LIMIT 1").fetchone()
+    return f"{row['id']}:{row['hash']}" if row else f"-1:{GENESIS}"
+
+
+HEAD = re.compile(r"(-1|\d{1,19}):([0-9a-f]{64})")
+
+
+def verify_ledger(
+    conn: psycopg.Connection, batch: int = 5000, cap: int = 100, expect_head: str | None = None
+) -> dict:
     """Walk the ledger hash chain in id order. A row whose hash does not match its content was
     edited (or its id changed: a reorder); a row whose prev_hash is not the previous row's hash
     follows a deleted, inserted or moved row. Returns {"rows", "head", "problems"} (at most
-    `cap` problems). A deleted tail is detected only against a head recorded earlier."""
+    `cap` problems). A deleted tail is detected only against a head recorded earlier: pass it
+    as `expect_head` (`<id>:<hash>` from `ledger_head`), which must still be in the chain."""
     rows, last, problems = 0, GENESIS, []
+    if expect_head is not None:
+        m = HEAD.fullmatch(expect_head)
+        if not m:
+            raise ValueError("the expected head is <id>:<64 hex hash> (from `ledger head`)")
+        anchor_id, anchor_hash = int(m[1]), m[2]
+        if anchor_id >= 0:  # -1 anchors an empty ledger: nothing to find
+            row = conn.execute("SELECT hash FROM ledger WHERE id = %s", (anchor_id,)).fetchone()
+            if row is None:
+                problems.append({"id": anchor_id, "problem": "the expected head row is gone"})
+            elif row["hash"] != anchor_hash:
+                problems.append({"id": anchor_id, "problem": "the expected head row changed"})
     after = -1
     while True:
         page = conn.execute(

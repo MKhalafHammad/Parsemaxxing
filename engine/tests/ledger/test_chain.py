@@ -150,6 +150,60 @@ def test_cli_verify_exit_codes(pg, pg_dsn, monkeypatch, tmp_path, capsys):
     assert f"row {ids[3]}: chain broken" in capsys.readouterr().out
 
 
+def test_cli_head_and_expect_head(pg, pg_dsn, monkeypatch, tmp_path, capsys):
+    """Adversarial: a removed tail, or a chain recomputed by a superuser, passes a plain verify
+    but fails against a head recorded earlier."""
+    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+    base = ["--env-file", str(tmp_path / "none.env"), "ledger"]
+    assert cli_main([*base, "head"]) == 0
+    assert capsys.readouterr().out.strip() == f"-1:{db.GENESIS}"  # empty ledger
+    ids = _job(pg)
+    assert cli_main([*base, "head"]) == 0
+    head = capsys.readouterr().out.strip()
+    assert head == f"{ids[-1]}:{db.verify_ledger(pg.conn)['head']['hash']}"
+    assert cli_main([*base, "verify", "--expect-head", head]) == 0
+    assert cli_main([*base, "verify", f"--expect-head=-1:{db.GENESIS}"]) == 0
+    capsys.readouterr()
+    for bad in ("7", f"x:{'a' * 64}", f"{ids[-1]}:{'A' * 64}", f"1:{'a' * 64}\nrow 1: ok"):
+        assert cli_main([*base, "verify", "--expect-head", bad]) == 4
+    assert "--expect-head is" in capsys.readouterr().err
+    # A newer row: the old anchor still holds.
+    pg.event("chain001", "log", {"line": "later"})
+    assert cli_main([*base, "verify", "--expect-head", head]) == 0
+    # Remove the tail back to before the anchor: the chain alone is intact, the anchor is not.
+    with bypass(pg.conn):
+        pg.conn.execute("DELETE FROM ledger WHERE id >= %s", (ids[-1],))
+    assert db.verify_ledger(pg.conn)["problems"] == []
+    capsys.readouterr()
+    assert cli_main([*base, "verify", "--expect-head", head]) == 5
+    out = capsys.readouterr()
+    assert f"row {ids[-1]}: the expected head row is gone" in out.out and "FAILED" in out.err
+
+
+def test_expect_head_detects_a_recomputed_chain(pg):
+    ids = _job(pg)
+    head = db.ledger_head(pg.conn)
+    with bypass(pg.conn):  # a superuser edits a row and recomputes every hash from it on
+        pg.conn.execute('UPDATE ledger SET data = \'{"line": "forged"}\' WHERE id = %s', (ids[1],))
+        for i in ids[1:]:
+            pg.conn.execute(
+                "UPDATE ledger l SET prev_hash = p.hash FROM ledger p"
+                " WHERE l.id = %s AND p.id = (SELECT max(id) FROM ledger WHERE id < %s)",
+                (i, i),
+            )
+            pg.conn.execute(
+                "UPDATE ledger SET hash = ledger_row_hash(prev_hash, id, job_id, at, event, data)"
+                " WHERE id = %s",
+                (i,),
+            )
+    assert problems(pg.conn) == []
+    assert db.verify_ledger(pg.conn, expect_head=head)["problems"] == [
+        {"id": ids[-1], "problem": "the expected head row changed"}
+    ]
+    with pytest.raises(ValueError):
+        db.verify_ledger(pg.conn, expect_head="1:short")
+
+
 def test_migration_backfills_existing_rows_in_order(fresh_db):  # noqa: F811
     with db.connect(fresh_db) as conn:
         _apply_v1(conn)  # 001-004: a v1 ledger without hashes
