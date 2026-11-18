@@ -1,6 +1,6 @@
 "use client";
 
-import { Circle, CircleCheck, CircleX, Copy, Plus, TriangleAlert } from "lucide-react";
+import { Circle, CircleAlert, CircleCheck, CircleX, Copy, Plus, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Field, FormError, formValues } from "@/components/auth/fields";
@@ -33,6 +33,8 @@ export default function TokensPage() {
   const [now, setNow] = useState(() => Date.now());
   const [created, setCreated] = useState<Created | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const [nameError, setNameError] = useState("");
   const [leaving, setLeaving] = useState(false);
   const [revoking, setRevoking] = useState<ApiToken | null>(null);
 
@@ -45,10 +47,14 @@ export default function TokensPage() {
     e.preventDefault();
     const v = formValues(e);
     setCreateError("");
+    const name = v("name").trim();
+    setNameError(/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/.test(name) ? "" : "Enter a name of 1 to 64 letters, digits, spaces, '.', '_' and '-'.");
+    if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/.test(name) || !(days >= 1 && days <= 90)) return;
     try {
-      const r = await postJson<Created>("/auth/tokens", { name: v("name").trim(), role: v("role"), expires_in_days: Number(v("days")) });
+      const r = await postJson<Created>("/auth/tokens", { name, role: v("role"), expires_in_days: Number(v("days")) });
       setCreating(false);
       setCopied(false);
+      setCopyFailed(false);
       setLeaving(false);
       setCreated(r);
       load();
@@ -142,8 +148,8 @@ export default function TokensPage() {
                     <Td className="whitespace-nowrap">
                       {when(t.expires_at)}
                       {t.status === "active" && Number.isFinite(left) && (
-                        <span className={left <= 14 ? "flex items-center gap-1 text-warn" : "block text-muted"}>
-                          {left <= 14 && <TriangleAlert aria-hidden className="h-3.5 w-3.5" />}
+                        <span className={left <= 3 ? "flex items-center gap-1 font-medium text-bad" : left <= 14 ? "flex items-center gap-1 text-warn" : "block text-muted"}>
+                          {left <= 3 ? <CircleAlert aria-hidden className="h-3.5 w-3.5" /> : left <= 14 && <TriangleAlert aria-hidden className="h-3.5 w-3.5" />}
                           {left} {left === 1 ? "day" : "days"} left
                         </span>
                       )}
@@ -170,8 +176,8 @@ export default function TokensPage() {
       </section>
 
       <Dialog open={creating} onClose={() => setCreating(false)} title="Create token">
-        <form onSubmit={create} className="grid gap-4">
-          <Field id="name" label="Name" hint="For example ci-runner. Letters, digits, spaces, '.', '_' and '-'." required maxLength={64} pattern="[A-Za-z0-9][A-Za-z0-9 ._\-]{0,63}" autoComplete="off" data-autofocus />
+        <form onSubmit={create} className="grid gap-4" noValidate>
+          <Field id="name" label="Name" hint="For example ci-runner. Letters, digits, spaces, '.', '_' and '-'." error={nameError || undefined} aria-required maxLength={64} autoComplete="off" data-autofocus />
           <div className="grid gap-1">
             <Label htmlFor="role">Role</Label>
             <select id="role" name="role" defaultValue="viewer" className="h-9 rounded-md border border-line-strong bg-surface-solid px-2 text-sm" aria-describedby="role-hint">
@@ -188,10 +194,11 @@ export default function TokensPage() {
             type="number"
             min={1}
             max={90}
-            required
+            aria-required
             value={days}
             onChange={(e) => setDays(Number(e.target.value))}
-            hint={days >= 1 && days <= 90 ? `1 to 90 days. Expires on ${new Date(now + days * DAY).toLocaleDateString()}.` : "Use 1 to 90 days."}
+            hint={days >= 1 && days <= 90 ? `1 to 90 days. Expires on ${new Date(now + days * DAY).toLocaleDateString()}.` : undefined}
+            error={days >= 1 && days <= 90 ? undefined : "Use 1 to 90 days."}
           />
           <FormError error={createError} />
           <div className="flex justify-end gap-2">
@@ -215,10 +222,15 @@ export default function TokensPage() {
               variant="outline"
               size="sm"
               className="justify-self-start"
-              onClick={() => navigator.clipboard.writeText(created.token).then(() => setCopied(true), () => undefined)}
+              onClick={() => navigator.clipboard.writeText(created.token).then(() => setCopied(true), () => setCopyFailed(true))}
             >
               <Copy aria-hidden className="h-4 w-4" /> {copied ? "Copied" : "Copy"}
             </Button>
+            {copyFailed && !copied && (
+              <p role="status" className="text-sm text-warn">
+                Copy failed. Select the token and copy it.
+              </p>
+            )}
             <p className="text-[13px] text-muted">
               Use it from a shell: <code className="font-mono">export PMX_TOKEN=&lt;your token&gt;</code>
             </p>

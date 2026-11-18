@@ -1,6 +1,9 @@
 // Server-side proxy to the engine. The browser never learns ENGINE_URL, and only these paths
 // and methods pass. State changes must come from this app's own pages: a same-origin Origin
 // and the custom header are both required, and the engine checks its header again.
+import { timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 import { NextRequest } from "next/server";
 
 import { errorResponse } from "@/lib/error-envelope";
@@ -26,6 +29,23 @@ const ROUTES: { method: string; pattern: RegExp }[] = [
   { method: "POST", pattern: new RegExp(`^auth/(sessions|tokens)/${UUID}/revoke$`) },
   { method: "POST", pattern: new RegExp(`^auth/users/${UUID}/(role|disable|enable|sessions/revoke)$`) },
 ];
+
+// The https proxy proves it set X-Forwarded-For by sending this secret as X-Pmx-Hop. Read once;
+// with no file, X-Forwarded-For is never passed on (a client could have sent it).
+let hopSecret: Buffer | null | undefined;
+function trustedHop(sent: string | null): boolean {
+  if (hopSecret === undefined) {
+    try {
+      const v = readFileSync(process.env.PMX_PROXY_HOP_FILE || "", "utf8").trim();
+      hopSecret = v ? Buffer.from(v) : null;
+    } catch {
+      hopSecret = null;
+    }
+  }
+  if (!hopSecret || !sent) return false;
+  const got = Buffer.from(sent);
+  return got.length === hopSecret.length && timingSafeEqual(got, hopSecret);
+}
 
 async function forward(req: NextRequest, path: string[]): Promise<Response> {
   // Segments arrive decoded: an encoded separator or dot segment is refused, not interpreted.
@@ -61,9 +81,9 @@ async function forward(req: NextRequest, path: string[]): Promise<Response> {
   if (session && /^[A-Za-z0-9_.~+/=-]{1,512}$/.test(session)) headers.cookie = `${SESSION_COOKIE}=${session}`;
   const origin = req.headers.get("origin");
   if (origin && allowedOrigin(origin)) headers.origin = origin;
-  // shortcut: Next.js keeps a client-sent X-Forwarded-For when the web port is exposed directly,
-  // so this hop is only trustworthy behind the https reverse proxy; the engine still validates it.
-  const ip = req.headers.get("x-forwarded-for")?.split(",").pop()?.trim();
+  // The client IP only when the request came through the https proxy (X-Pmx-Hop matches);
+  // X-Pmx-Hop itself is never sent upstream.
+  const ip = trustedHop(req.headers.get("x-pmx-hop")) ? req.headers.get("x-forwarded-for")?.split(",").pop()?.trim() : undefined;
   if (ip && /^[0-9A-Fa-f:.]{2,45}$/.test(ip)) headers["x-forwarded-for"] = ip;
   const url = `${ENGINE_URL}/${target}${req.nextUrl.search}`;
   let upstream: Response;

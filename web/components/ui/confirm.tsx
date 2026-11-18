@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import { FormError } from "@/components/auth/fields";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ export function Confirm({
   confirm,
   onConfirm,
   destructive = false,
+  disabled = false,
   children,
 }: {
   open: boolean;
@@ -22,10 +23,13 @@ export function Confirm({
   confirm: string;
   onConfirm: (form: FormData) => Promise<void>;
   destructive?: boolean;
+  /** Keeps the confirm button off until the dialog's choice is valid. */
+  disabled?: boolean;
   children?: React.ReactNode;
 }) {
   const [error, setError] = useState<string | Error>("");
   const [busy, setBusy] = useState(false);
+  const bodyId = useId();
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -50,15 +54,20 @@ export function Confirm({
       }}
       role="alertdialog"
       title={title}
+      describedBy={children ? bodyId : undefined}
     >
       <form onSubmit={submit} className="grid gap-4">
-        {children}
+        {children && (
+          <div id={bodyId} className="grid gap-4">
+            {children}
+          </div>
+        )}
         <FormError error={error} />
         <div className="flex justify-end gap-2">
           <Button type="button" data-autofocus variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button type="submit" disabled={busy} variant={destructive ? "destructive" : "default"}>
+          <Button type="submit" disabled={busy || disabled} variant={destructive ? "destructive" : "default"}>
             {confirm}
           </Button>
         </div>

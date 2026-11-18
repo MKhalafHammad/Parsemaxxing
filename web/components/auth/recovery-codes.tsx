@@ -1,14 +1,14 @@
 "use client";
 
-import { Copy, Download } from "lucide-react";
+import { Download } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 
 /** Recovery codes, shown once: Copy, Download, and Continue only after "I have saved these codes". */
 export function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
   const [saved, setSaved] = useState(false);
-  const [copied, setCopied] = useState("");
   const text = codes.join("\n") + "\n";
 
   function download() {
@@ -30,20 +30,10 @@ export function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () =
         ))}
       </ul>
       <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() => navigator.clipboard.writeText(text).then(() => setCopied("Copied."), () => setCopied("Copy failed. Select the codes and copy them."))}
-        >
-          <Copy aria-hidden className="h-4 w-4" /> Copy
-        </Button>
         <Button type="button" variant="outline" size="sm" onClick={download}>
           <Download aria-hidden className="h-4 w-4" /> Download
         </Button>
-        <span role="status" className="text-sm text-muted">
-          {copied}
-        </span>
+        <CopyButton text={text} failed="Select the codes and copy them." />
       </div>
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={saved} onChange={(e) => setSaved(e.target.checked)} className="h-4 w-4" />I have saved these codes

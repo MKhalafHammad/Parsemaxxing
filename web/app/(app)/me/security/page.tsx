@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/confirm";
 import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/table";
-import { api, postJson, type Session } from "@/lib/api";
+import { api, ApiError, postJson, type Session } from "@/lib/api";
 import { when } from "@/lib/utils";
 
 export default function SecurityPage() {
@@ -22,7 +22,7 @@ export default function SecurityPage() {
   const [loadError, setLoadError] = useState<string | Error>("");
   const [mfaOn, setMfaOn] = useState(!!me?.user.mfa);
   const [codes, setCodes] = useState<string[] | null>(null);
-  const [pwError, setPwError] = useState<string | Error>("");
+  const [pwError, setPwError] = useState<{ field: string; error: string | Error } | null>(null);
   const [codesError, setCodesError] = useState<string | Error>("");
   const [message, setMessage] = useState("");
   const [dialog, setDialog] = useState<"disable" | "everywhere" | Session | null>(null);
@@ -36,15 +36,17 @@ export default function SecurityPage() {
     e.preventDefault();
     const form = e.currentTarget;
     const v = formValues(e);
-    setPwError("");
-    if (v("new_password") !== v("new_password2")) return setPwError("The two new passwords don't match. Type the same password twice.");
+    setPwError(null);
+    if (v("new_password") !== v("new_password2")) return setPwError({ field: "new_password2", error: "The two new passwords don't match. Type the same password twice." });
     try {
       await postJson("/auth/password", { current_password: v("current_password"), new_password: v("new_password") });
       form.reset();
       setMessage("Password changed. Your other sessions were signed out.");
       load();
     } catch (err) {
-      setPwError(err as Error);
+      // 403: the current password is wrong; 422: the new one breaks the rule; anything else is the form's.
+      const status = err instanceof ApiError ? err.status : 0;
+      setPwError({ field: status === 403 ? "current_password" : status === 422 ? "new_password" : "", error: err as Error });
     }
   }
 
@@ -80,10 +82,16 @@ export default function SecurityPage() {
             Change password
           </h2>
           <form onSubmit={changePassword} className="grid gap-3 sm:max-w-sm">
-            <PasswordField id="current_password" label="Current password" autoComplete="current-password" />
-            <PasswordField id="new_password" label="New password" autoComplete="new-password" hint="12 to 128 characters. Common passwords are refused." />
-            <PasswordField id="new_password2" label="New password again" autoComplete="new-password" />
-            <FormError error={pwError} />
+            <PasswordField id="current_password" label="Current password" autoComplete="current-password" error={pwError?.field === "current_password" ? pwError.error : undefined} />
+            <PasswordField
+              id="new_password"
+              label="New password"
+              autoComplete="new-password"
+              hint="12 to 128 characters. Common passwords are refused."
+              error={pwError?.field === "new_password" ? pwError.error : undefined}
+            />
+            <PasswordField id="new_password2" label="New password again" autoComplete="new-password" error={pwError?.field === "new_password2" ? pwError.error : undefined} />
+            {pwError && !pwError.field && <FormError error={pwError.error} />}
             <Button type="submit" className="justify-self-start">
               Change password
             </Button>
@@ -117,15 +125,19 @@ export default function SecurityPage() {
               <p id="recovery-help" className="text-sm text-muted">
                 Creating new codes makes the old ones stop working.
               </p>
-              <PasswordField id="codes_password" label="Password" autoComplete="current-password" />
-              <FormError error={codesError} />
+              <PasswordField id="codes_password" label="Password" autoComplete="current-password" error={codesError || undefined} />
               <Button type="submit" variant="outline" className="justify-self-start">
                 Create new codes
               </Button>
             </form>
-            <Button variant="destructive" className="justify-self-start" onClick={() => setDialog("disable")}>
-              Turn off MFA…
-            </Button>
+            {/* The engine refuses it for admins while MFA is required; older engines omit the flag. */}
+            {(me.mfa_required ?? me.user.role === "admin") ? (
+              <p className="mt-2 text-sm text-muted">MFA is required for admins.</p>
+            ) : (
+              <Button variant="destructive" className="mt-2 justify-self-start" onClick={() => setDialog("disable")}>
+                Turn off MFA…
+              </Button>
+            )}
           </>
         )}
       </section>

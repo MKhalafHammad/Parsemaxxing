@@ -15,7 +15,7 @@ export default defineConfig({
       origins: [],
     },
   },
-  webServer: {
+  webServer: [{
     command: "cp -r .next/static .next/standalone/.next/ && node .next/standalone/server.js",
     url: "http://localhost:3100",
     reuseExistingServer: false,
@@ -28,4 +28,20 @@ export default defineConfig({
       WEB_ORIGINS: "http://localhost:3100",
     },
   },
+  // A second server for e2e/proxy-hop.spec.ts: its engine is an echo server the test runs on 3199,
+  // and it trusts X-Forwarded-For only with the X-Pmx-Hop value in e2e/proxy-hop.txt.
+  {
+    command: "node .next/standalone/server.js",
+    url: "http://localhost:3101/login",
+    reuseExistingServer: false,
+    env: {
+      PORT: "3101",
+      HOSTNAME: "127.0.0.1",
+      ENGINE_URL: "http://127.0.0.1:3199",
+      NEXT_TELEMETRY_DISABLED: "1",
+      ALLOWED_HOSTS: "localhost:3101",
+      WEB_ORIGINS: "http://localhost:3101",
+      PMX_PROXY_HOP_FILE: "e2e/proxy-hop.txt",
+    },
+  }],
 });

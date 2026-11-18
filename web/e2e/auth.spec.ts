@@ -344,3 +344,157 @@ test("audit log: read-only, filter by action in the URL, older pages", async ({ 
   await expect(table.getByRole("row")).toHaveCount(4);
   expect(asked).toContain("limit=26&event=login&before=75");
 });
+
+test("Turn off MFA is replaced by the rule for admins who must use MFA, and offered to viewers", async ({ page }) => {
+  await page.route("**/api/engine/auth/sessions", (r) => r.fulfill({ json: [] }));
+  for (const [me, shown] of [
+    [{ user: user("admin"), stage: "full", via: "session", mfa_required: true }, false],
+    [{ user: user("admin"), stage: "full", via: "session" }, false], // older engine: no flag, an admin counts as required
+    [{ user: user("viewer", { mfa: true }), stage: "full", via: "session", mfa_required: false }, true],
+  ] as const) {
+    await page.route("**/api/engine/auth/me", (r) => r.fulfill({ json: me }));
+    await page.goto("/me/security");
+    await expect(page.getByRole("heading", { name: "Account security" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Turn off MFA…" })).toHaveCount(shown ? 1 : 0);
+    await expect(page.getByText("MFA is required for admins.")).toHaveCount(shown ? 0 : 1);
+  }
+});
+
+test("Sign in as someone else leaves the MFA step, the recovery step and forced enrolment", async ({ page }) => {
+  let out = 0;
+  await page.route("**/api/engine/auth/logout", (r) => ((out++), r.fulfill({ json: { signed_out: true } })));
+  await page.route("**/api/engine/setup", (r) => r.fulfill({ json: { needed: false } }));
+  await page.route("**/api/engine/auth/mfa/enrol", (r) => r.fulfill({ json: { secret: "JBSWY3DPEHPK3PXP", otpauth_uri: "otpauth://totp/x" } }));
+  await signedInAs(page, "admin", "mfa");
+  await page.goto("/login/recovery");
+  await expect(page.getByText("Lost your authenticator and your codes? Ask an admin to reset your MFA.")).toBeVisible();
+  for (const [path, stage] of [["/login/mfa", "mfa"], ["/login/recovery", "mfa"], ["/mfa/enrol", "enrol"]] as const) {
+    await signedInAs(page, "admin", stage);
+    await page.goto(path);
+    await page.getByRole("button", { name: "Sign in as someone else" }).click();
+    await expect(page, path).toHaveURL(/\/login$/);
+  }
+  expect(out).toBe(3);
+});
+
+test("the MFA code accepts a pasted '123 456' and states the rule otherwise", async ({ page }) => {
+  let sent: unknown = null;
+  await page.route("**/api/engine/auth/login/mfa", (r) => ((sent = JSON.parse(r.request().postData() ?? "{}")), r.fulfill({ json: { stage: "full", user: user("admin") } })));
+  await page.route("**/api/engine/runs", (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/engine/tas", (r) => r.fulfill({ json: [] }));
+  await page.goto("/login/mfa");
+  const code = page.getByLabel("6-digit code");
+  await code.fill("12a");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(code).toHaveAttribute("aria-invalid", "true");
+  await expect(code).toHaveAccessibleDescription(/Enter the 6 digits from your authenticator app\./);
+  expect(sent).toBeNull();
+  await code.fill("123 456");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect.poll(() => sent).toEqual({ code: "123456" });
+});
+
+test("MFA set-up from account security asks for the password; forced enrolment does not", async ({ page }) => {
+  const bodies: unknown[] = [];
+  await page.route("**/api/engine/auth/mfa/enrol", (r) => {
+    bodies.push(JSON.parse(r.request().postData() ?? "{}"));
+    return r.fulfill({ json: { secret: "JBSWY3DPEHPK3PXP", otpauth_uri: "otpauth://totp/x" } });
+  });
+  await signedInAs(page, "viewer");
+  await page.goto("/mfa/enrol?next=%2Fme%2Fsecurity");
+  await expect(page.getByLabel("Setup key")).toHaveCount(0);
+  await page.getByLabel("Current password", { exact: true }).fill("my password here");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByLabel("Setup key")).toHaveText("JBSWY3DPEHPK3PXP");
+  await expect(page.getByRole("button", { name: "Copy key" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign in as someone else" })).toHaveCount(0);
+  await signedInAs(page, "admin", "enrol");
+  await page.goto("/mfa/enrol");
+  await expect(page.getByText("Admins need MFA. Set it up to continue.")).toBeVisible();
+  await expect(page.getByLabel("Setup key")).toBeVisible();
+  expect(bodies).toEqual([{ password: "my password here" }, {}]);
+});
+
+test("times are relative, with the absolute time and a named zone on hover and in the name", async ({ page }) => {
+  const recent = new Date(Date.now() - 5 * 60_000).toISOString();
+  await page.route("**/api/engine/auth/sessions", (r) =>
+    r.fulfill({ json: [{ id: "00000000-0000-4000-8000-0000000000s1", created_at: recent, last_seen_at: recent, expires_at: recent, ip: "192.0.2.10", user_agent: "Firefox on Linux", current: true }] }),
+  );
+  await page.goto("/me/security");
+  const t = page.getByRole("table", { name: "Active sessions" }).locator("time").first();
+  await expect(t).toContainText("5 minutes ago");
+  await expect(t).toHaveAttribute("title", /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+$/);
+  await expect(t).toHaveAttribute("datetime", recent);
+  expect(await t.locator(".sr-only").textContent()).toMatch(/^5 minutes ago, \d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+$/);
+
+  await page.route("**/api/engine/audit*", (r) => r.fulfill({ json: [{ id: 1, at: "2026-11-19 13:05:00+00:00", actor: "avery", user_id: null, event: "login", outcome: "success", ip: "192.0.2.10", detail: {} }] }));
+  await page.goto("/settings/audit-log");
+  await expect(page.getByRole("table", { name: "Audit log" }).locator("time")).toContainText(/2026-11-19 \d{2}:\d{2} \S+/); // absolute, zone named
+});
+
+test("setup: the command can be copied and errors sit under their field", async ({ page }) => {
+  await page.route("**/api/engine/setup", (r) =>
+    r.request().method() === "GET" ? r.fulfill({ json: { needed: true } }) : r.fulfill(envelope(403, "This setup token is not valid.")),
+  );
+  await page.goto("/setup");
+  await expect(page.getByRole("button", { name: "Copy command" })).toBeVisible();
+  await page.getByLabel("Setup token").fill("wrong");
+  await page.getByLabel("User name").fill("avery");
+  await page.getByLabel("Password", { exact: true }).fill("a long enough password");
+  const again = page.getByRole("textbox", { name: "Password again" });
+  await again.fill("something else entirely");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(again).toHaveAttribute("aria-invalid", "true");
+  await expect(again).toHaveAccessibleDescription(/The two passwords don't match/);
+  await again.fill("a long enough password");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByLabel("Setup token")).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByLabel("Setup token")).toHaveAccessibleDescription(/This setup token is not valid\./);
+  await expect(again).not.toHaveAttribute("aria-invalid", "true");
+});
+
+test("token: a failed copy says how to recover, expiry out of range is an inline error", async ({ page }) => {
+  await page.route("**/api/engine/auth/tokens", (r) =>
+    r.request().method() === "GET" ? r.fulfill({ json: [] }) : r.fulfill({ status: 201, json: { token: "pmxt_x", id: "00000000-0000-4000-8000-0000000000aa", name: "ci", role: "viewer", expires_at: "2026-12-19 10:00:00+00:00" } }),
+  );
+  await page.goto("/settings/api-tokens");
+  await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("denied")) } }));
+  await page.getByRole("button", { name: "Create token" }).click();
+  await page.getByLabel("Name").fill("ci");
+  const days = page.getByLabel("Expires in (days)");
+  await days.fill("120");
+  await expect(days).toHaveAttribute("aria-invalid", "true");
+  await expect(days).toHaveAccessibleDescription("Use 1 to 90 days.");
+  await days.fill("10");
+  await page.getByRole("dialog").getByRole("button", { name: "Create token" }).click();
+  await page.getByRole("button", { name: "Copy" }).click();
+  await expect(page.getByText("Copy failed. Select the token and copy it.")).toBeVisible();
+});
+
+test("users: own Disable explains why; Change role waits for a different role; confirm text is the description", async ({ page }) => {
+  await page.route("**/api/engine/auth/users", (r) => r.fulfill({ json: [user("admin"), user("viewer")] }));
+  await page.goto("/settings/users");
+  const own = page.getByRole("button", { name: "Disable user… avery" });
+  await expect(own).toHaveAttribute("aria-disabled", "true");
+  await expect(own).toHaveAccessibleDescription("You can't disable your own account.");
+  await own.click({ force: true });
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Disable user… riley" }).click();
+  await expect(page.getByRole("alertdialog")).toHaveAccessibleDescription("Signs them out everywhere. Their approvals and history stay.");
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await page.getByRole("button", { name: "Change role… riley" }).click();
+  const confirm = page.getByRole("button", { name: "Change role", exact: true });
+  await expect(confirm).toBeDisabled();
+  await page.getByRole("alertdialog").getByLabel("Role").selectOption("admin");
+  await expect(confirm).toBeEnabled();
+});
+
+test("a viewer's empty runs list says an admin starts runs", async ({ page }) => {
+  await signedInAs(page, "viewer");
+  await page.route("**/api/engine/runs", (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/engine/tas", (r) => r.fulfill({ json: [] }));
+  await page.goto("/");
+  await expect(page.getByText("No runs yet. An admin starts runs.")).toBeVisible();
+});

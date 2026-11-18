@@ -4,11 +4,25 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
-import { Field, FormError, formValues } from "@/components/auth/fields";
+import { CODE_RULE, CodeField, Field, formValues, mfaCode } from "@/components/auth/fields";
 import { notice } from "@/components/auth/session";
 import { Button } from "@/components/ui/button";
 import { postJson, type SignedIn } from "@/lib/api";
 import { safeNext } from "@/lib/next-path";
+
+/** The way out of a partial session (MFA step, recovery code, forced enrolment). */
+export function SignInAsSomeoneElse() {
+  const router = useRouter();
+  return (
+    <button
+      type="button"
+      className="justify-self-start text-sm underline underline-offset-2"
+      onClick={() => postJson("/auth/logout", {}).finally(() => router.replace("/login"))}
+    >
+      Sign in as someone else
+    </button>
+  );
+}
 
 /** The second sign-in step: a 6-digit code, or one recovery code. */
 export function CodeForm({ recovery }: { recovery: boolean }) {
@@ -21,11 +35,13 @@ export function CodeForm({ recovery }: { recovery: boolean }) {
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const code = formValues(e)("code");
+    const raw = formValues(e)("code");
+    const code = recovery ? raw.trim() : mfaCode(raw);
+    if (!code) return setError(recovery ? "Enter a recovery code." : CODE_RULE);
     setBusy(true);
     setError("");
     try {
-      const r = await postJson<SignedIn>("/auth/login/mfa", recovery ? { recovery_code: code.trim() } : { code: code.trim() });
+      const r = await postJson<SignedIn>("/auth/login/mfa", recovery ? { recovery_code: code } : { code });
       if (r.recovery_codes_left !== undefined) notice.recoveryLeft = r.recovery_codes_left;
       router.replace(safeNext(next));
     } catch (err) {
@@ -41,20 +57,10 @@ export function CodeForm({ recovery }: { recovery: boolean }) {
       </h1>
       <form onSubmit={submit} className="grid gap-4">
         {recovery ? (
-          <Field id="code" label="Recovery code" hint="Each recovery code works once." autoComplete="off" required maxLength={64} spellCheck={false} />
+          <Field id="code" label="Recovery code" hint="Each recovery code works once." error={error} autoComplete="off" aria-required maxLength={64} spellCheck={false} />
         ) : (
-          <Field
-            id="code"
-            label="6-digit code"
-            hint="From your authenticator app."
-            autoComplete="one-time-code"
-            inputMode="numeric"
-            pattern="\d{6}"
-            maxLength={6}
-            required
-          />
+          <CodeField hint="From your authenticator app." error={error} />
         )}
-        <FormError error={error} />
         <Button type="submit" disabled={busy}>
           {busy ? "Verifying…" : "Verify"}
         </Button>
@@ -62,6 +68,8 @@ export function CodeForm({ recovery }: { recovery: boolean }) {
       <Link href={`${recovery ? "/login/mfa" : "/login/recovery"}${back}`} className="text-sm underline underline-offset-2">
         {recovery ? "Use a 6-digit code instead" : "Use a recovery code instead"}
       </Link>
+      {recovery && <p className="text-sm text-muted">Lost your authenticator and your codes? Ask an admin to reset your MFA.</p>}
+      <SignInAsSomeoneElse />
     </section>
   );
 }

@@ -59,5 +59,14 @@ for (const role of ["admin", "viewer"] as const) {
       await expect(page.getByRole("heading", { name: heading, level: 1 }), path).toBeVisible();
       expect(await serious(page), path).toEqual([]);
     }
+    // The setup form itself (no admin yet), and the forced enrolment with its setup key.
+    await page.route("**/api/engine/setup", (r) => r.fulfill({ json: { needed: true } }));
+    await page.goto("/setup");
+    await expect(page.getByRole("heading", { name: "Create the first admin", level: 1 })).toBeVisible();
+    expect(await serious(page), "/setup form").toEqual([]);
+    await signedInAs(page, role, "enrol");
+    await page.goto("/mfa/enrol");
+    await expect(page.getByLabel("Setup key")).toBeVisible();
+    expect(await serious(page), "/mfa/enrol forced").toEqual([]);
   });
 }

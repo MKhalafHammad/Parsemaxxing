@@ -17,7 +17,7 @@ export type User = {
   created_at: string;
 };
 export type Stage = "mfa" | "enrol" | "full";
-export type Me = { user: User; stage: Stage; via: string };
+export type Me = { user: User; stage: Stage; via: string; mfa_required?: boolean };
 export type SignedIn = { stage: Stage; user: User; recovery_codes_left?: number };
 export type Session = { id: string; created_at: string; last_seen_at: string; expires_at: string; ip: string; user_agent: string; current: boolean };
 export type ApiToken = { id: string; name: string; role: Role; owner: string; created_at: string; expires_at: string; last_used_at: string | null; status: "active" | "expired" | "revoked" };

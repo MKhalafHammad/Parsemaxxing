@@ -27,6 +27,7 @@ export default function UsersPage() {
   const [addError, setAddError] = useState<string | Error>("");
   const [action, setAction] = useState<Action | null>(null);
   const [message, setMessage] = useState("");
+  const [newRole, setNewRole] = useState("");
 
   const load = useCallback(() => {
     api<User[]>("/auth/users").then(setUsers, setError);
@@ -49,7 +50,10 @@ export default function UsersPage() {
     }
   }
 
-  const act = (kind: Action["kind"], user: User) => setAction({ kind, user });
+  const act = (kind: Action["kind"], user: User) => {
+    setNewRole(user.role);
+    setAction({ kind, user });
+  };
   const shown = (users ?? []).filter((u) => !role || u.role === role);
   const name = action ? action.user.display_name || action.user.username : "";
 
@@ -160,8 +164,18 @@ export default function UsersPage() {
                         <Button size="sm" variant="outline" onClick={() => act("enable", u)}>
                           Enable user… <span className="sr-only">{u.username}</span>
                         </Button>
+                      ) : u.id === me?.user.id ? (
+                        /* Focusable with its reason, like <AdminOnly>; the engine refuses it anyway. */
+                        <span className="inline-flex flex-wrap items-center gap-2">
+                          <Button size="sm" variant="destructive" aria-disabled aria-describedby="own-disable" className="cursor-not-allowed opacity-50">
+                            Disable user… <span className="sr-only">{u.username}</span>
+                          </Button>
+                          <span id="own-disable" className="text-[13px] text-muted">
+                            You can&apos;t disable your own account.
+                          </span>
+                        </span>
                       ) : (
-                        <Button size="sm" variant="destructive" disabled={u.id === me?.user.id} onClick={() => act("disable", u)}>
+                        <Button size="sm" variant="destructive" onClick={() => act("disable", u)}>
                           Disable user… <span className="sr-only">{u.username}</span>
                         </Button>
                       )}
@@ -204,6 +218,7 @@ export default function UsersPage() {
         }
         confirm={action?.kind === "role" ? "Change role" : action?.kind === "disable" ? "Disable user" : action?.kind === "enable" ? "Enable user" : "Sign out everywhere"}
         destructive={action?.kind === "disable"}
+        disabled={action?.kind === "role" && newRole === action.user.role}
         onConfirm={async (f) => {
           const a = action!;
           const path = { role: "role", disable: "disable", enable: "enable", signout: "sessions/revoke" }[a.kind];
@@ -214,7 +229,7 @@ export default function UsersPage() {
         {action?.kind === "role" && (
           <div className="grid gap-1">
             <Label htmlFor="change-role">Role</Label>
-            <select id="change-role" name="role" defaultValue={action.user.role} className={SELECT}>
+            <select id="change-role" name="role" value={newRole} onChange={(e) => setNewRole(e.target.value)} className={SELECT}>
               <option value="viewer">Viewer</option>
               <option value="admin">Admin</option>
             </select>

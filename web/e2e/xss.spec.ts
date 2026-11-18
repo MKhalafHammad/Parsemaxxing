@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { DIFF_MARKERS, expect, LEDGER, mockRun, run, test, user, XSS } from "./fixtures";
+import { DIFF_MARKERS, expect, LEDGER, mockRun, run, signedInAs, test, user, XSS } from "./fixtures";
 
 function watchDialogs(page: Page): string[] {
   const dialogs: string[] = [];
@@ -234,7 +234,24 @@ test("sign-in and MFA errors from the engine render as text", async ({ page }) =
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("main").getByRole("alert")).toContainText(XSS);
   await page.route("**/api/engine/auth/mfa/enrol", (r) => r.fulfill({ json: { secret: XSS, otpauth_uri: XSS } }));
+  await signedInAs(page, "admin", "enrol");
   await page.goto("/mfa/enrol");
   await expect(page.getByLabel("Setup key")).toHaveText(XSS);
+  // Field-level errors (MFA step, setup token) are the engine's text, escaped.
+  await page.route("**/api/engine/auth/login/mfa", (r) => r.fulfill({ status: 401, json: { error: { code: "e", message: XSS, request_id: "r" }, detail: XSS } }));
+  await page.goto("/login/mfa");
+  await page.getByLabel("6-digit code").fill("123456");
+  await page.getByRole("button", { name: "Verify" }).click();
+  await expect(page.locator("#code-error")).toContainText(XSS);
+  await page.route("**/api/engine/setup", (r) =>
+    r.request().method() === "GET" ? r.fulfill({ json: { needed: true } }) : r.fulfill({ status: 403, json: { error: { code: "e", message: XSS, request_id: "r" }, detail: XSS } }),
+  );
+  await page.goto("/setup");
+  await page.getByLabel("Setup token").fill(XSS);
+  await page.getByLabel("User name").fill("avery");
+  await page.getByLabel("Password", { exact: true }).fill("a long enough password");
+  await page.getByRole("textbox", { name: "Password again" }).fill("a long enough password");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.locator("#token-error")).toContainText(XSS);
   await nothingInjected(page, dialogs);
 });

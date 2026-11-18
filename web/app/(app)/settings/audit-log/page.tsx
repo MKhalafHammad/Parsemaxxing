@@ -138,7 +138,7 @@ function AuditLog() {
             <TBody>
               {page.map((r) => (
                 <Tr key={r.id}>
-                  <Td className="whitespace-nowrap pl-4">{when(r.at)}</Td>
+                  <Td className="whitespace-nowrap pl-4">{when(r.at, { absolute: true })}</Td>
                   <Td className="break-all">{r.actor}</Td>
                   <Td>{EVENTS[r.event] ?? r.event}</Td>
                   <Td>
