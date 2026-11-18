@@ -22,7 +22,7 @@ Updated at the end of every phase.
 | 9 | Mixed-feed routing | — | Superseded by Phase 23 | |
 | 10 | One-command Docker setup, README, scenario scripts | Nov 3 | Done (clean-VM test passed; image digests deferred, R12) | Nov 4 |
 | 11 | Foundation: tag, rename, licence, cleanup, v2 design and security docs, lab probes | — | In progress | |
-| 12 | Hardened runtime, settings store and vault | — | Planned | |
+| 12 | Hardened runtime, settings store and vault | — | Built, in review (deferred items listed in the phase) | |
 | 13 | Authentication and RBAC | — | Planned | |
 | 14 | LDAP | — | Planned | |
 | 15 | App shell and UX architecture | — | Planned | |
@@ -806,6 +806,20 @@ Each phase builds the design sections it names in [design.md](design.md#v2-platf
 
 **Goal:** the stack is hardened, every runtime setting comes from the settings service, every secret from the vault, and the ledger is a verifiable hash chain (7.5, 7.7 A02 to A04 and A08, 7.13 Docker).
 **Owners:** `devops` (Docker, CI, supply chain), `identity` (settings, vault), `engine` (bootstrap, ledger chain, migrations).
+
+### Status (Nov 18, 2026: built, in review)
+
+| Deliverable | Status |
+| --- | --- |
+| Docker: networks (`edge`, `app`, `data`, `splunk_api`, `splunk`, `egress`), the engine reaching Splunk only through a TCP relay to port 8089, PostgreSQL unpublished (`cli` profile on 127.0.0.1), Docker secrets, limits, `tmpfs` with `noexec`, healthchecks, `https` profile (Caddy, HSTS) | Built. The Splunk container keeps `sudo`, so it runs without `no-new-privileges`, `cap_drop` and a read-only root (threat model R17) |
+| Supply chain: images by digest (test), `engine/requirements.lock` with `--require-hashes`, `npm audit signatures`, CycloneDX SBOM (Syft) and Trivy scan in CI | Built. The `pgvector/pgvector` image switch moves to Phase 20 (the collation change needs a REINDEX plan); the CIM package checksum stays with Phase 17c |
+| Settings service: groups, versions, history, snapshots by hash, environment overrides read-only, export and import with a diff | Built. Settings are read at process start; wiring a snapshot into each job (the snapshot function exists) is deferred |
+| Vault: AES-256-GCM envelope encryption, AAD binding, KEK file (`make secrets`, also run by `make setup` and `make up`), `rotate-kek`, redaction in `repr` | Built. Relay SSH key generation and expiry tracking come later (Phases 18, 17) |
+| Bootstrap slim-down and `parsemaxxing settings import-env` | Built. The wizard listing removable `.env` keys is Phase 15 |
+| Ledger hash chain and `parsemaxxing ledger verify` | Built. No external anchor yet (threat model R20) |
+| Backups: `parsemaxxing backup` / `restore`, `make backup` / `restore`, `restore-test` in CI | Built for the database. The package store joins backups in Phase 17b |
+| Error envelope with request id and security headers | Built |
+| Make targets | Built: `secrets`, `e2e`, `lock`, `digests`, `sbom`, `scan`, `backup`, `restore`, `restore-test`. `make relay-test` is deferred to the relay work |
 
 ### Deliverables
 - **Docker:** networks `edge`, `app`, `data`, `splunk`; PostgreSQL unpublished by default (`cli` profile on 127.0.0.1); Docker secrets for the KEK and database passwords; CPU, memory and pids limits; `tmpfs` with `noexec`; healthchecks; optional `https` profile with a reverse proxy and HSTS.

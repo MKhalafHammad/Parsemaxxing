@@ -31,12 +31,12 @@
 | A03-1 | GitHub Actions pinned to commit SHAs | `.github/workflows/ci.yml` | semgrep `p/default` in `make security`; appsec review | 0 | Built | devops |
 | A03-2 | Dependency audit: pip-audit, npm audit (shipped packages), bandit, semgrep, gitleaks in CI | `Makefile` `security`, `.github/workflows/ci.yml` | CI `make security` step | 0, 6 | Built (dev-dependency advisory tracked as R11) | devops |
 | A03-3 | `npm ci` with the committed lockfile | `web/Dockerfile`, `web/package-lock.json` | Image build in CI | 6 | Built; `npm audit signatures` planned (Phase 12) | devops |
-| A03-4 | Images pinned by digest (closes R12) | `docker-compose.yml`, `engine/Dockerfile`, `web/Dockerfile` | CI check that every `image:` and `FROM` has a digest | 12 | Planned (tags only today, R12) | devops |
-| A03-5 | Python dependencies locked with hashes (`--require-hashes`) | engine lock file, `engine/Dockerfile` | Image build fails on a changed hash | 12 | Planned (`pyproject.toml` uses `>=` ranges today) | devops |
-| A03-6 | CycloneDX SBOM per image and Trivy scan failing on high and critical | `.github/workflows/ci.yml`, `make sbom` | CI job | 12 | Planned | devops |
+| A03-4 | Images pinned by digest (closes R12) | `docker-compose.yml`, `engine/Dockerfile`, `web/Dockerfile`, CI service images in `.github/workflows/ci.yml` | `tests/test_compose.py::test_every_image_is_pinned_by_digest` | 12 | Built | devops |
+| A03-5 | Python dependencies locked with hashes (`--require-hashes`) | `engine/requirements.lock`, installed with `--require-hashes --no-deps` in `engine/Dockerfile` | `tests/test_compose.py::test_python_lock_covers_every_runtime_dependency`; the image build fails on a changed hash | 12 | Built | devops |
+| A03-6 | CycloneDX SBOM per image and Trivy scan failing on high and critical | `.github/workflows/ci.yml` job `images`, `scripts/image_check.sh`, `make sbom` / `make scan` | CI job `images` | 12 | Built | devops |
 | A03-7 | Two-week rule for new releases | dependency updates, appsec review | Review checklist | All | Built as a review rule (no automated check) | appsec |
 | A03-8 | Embedding model files pinned by SHA-256; CIM add-on checksum checked | `knowledge/`, CIM library in `cim_spec/` or its v2 package | Tampered-file tests | 17c, 20 | Planned | knowledge |
-| A04-1 | Vault: AES-256-GCM envelope encryption via `cryptography` only, per-secret data key, 96-bit random nonces, AAD binding id, purpose and version | `secrets/` | Round-trip, tampered-ciphertext and moved-ciphertext tests | 12 | Planned | identity |
+| A04-1 | Vault: AES-256-GCM envelope encryption via `cryptography` only, per-secret data key, 96-bit random nonces, AAD binding id, purpose and version | `secrets/` | `secrets/test_vault.py` (round trip, tampered row, changed AAD fields, ciphertext moved to another row, wrong KEK, scope) | 12 | Built | identity |
 | A04-2 | Argon2id password hashing at or above OWASP parameters | `auth/` | Parameter test; hash format test | 13 | Planned | identity |
 | A04-3 | TLS 1.2 or later everywhere; certificates verified | `tools/splunk_client.py`, `llm/`, `auth/` (LDAP), fetch helper | TLS tests against a self-signed endpoint without its CA | 12, 14, 17 | Planned (R2) | devops |
 | A04-4 | No secrets in URLs except the Splunk drift webhook token (Splunk cannot send headers), which also checks source IP | `api/` webhook route, `drift/` | Webhook test: wrong token, wrong IP | 22 | Planned | engine |
@@ -63,7 +63,7 @@
 | A08-2 | Reproducible packages; install re-checks the hash | `ta_builder/`, `tools/splunk_client.py` | Adv. `test_packages_are_reproducible`; `tools/test_splunk_client.py::test_install_rechecks_hash_and_location` | 2, 4 | Built | engine |
 | A08-3 | Deployment approvals bound to package SHA-256, environment and tiers | `deploy/` | Approval replay and mismatch tests | 18 | Planned | splunk |
 | A08-4 | Only `deploy/` writes to a non-sandbox Splunk | `deploy/` | Test that finds any production write path outside `deploy/` | 18 | Planned | splunk |
-| A08-5 | Ledger hash chain with `parsemaxxing ledger verify` and a UI integrity badge | `ledger/` | Chain tamper test | 12 | Planned | engine |
+| A08-5 | Ledger hash chain with `parsemaxxing ledger verify` and a UI integrity badge | `ledger/store.py`, `cli.py`, `ledger/backup.py`, `scripts/backup.sh`, `scripts/restore.sh` | `ledger/test_chain.py` (edits, removals, reorders, `test_cli_head_and_expect_head`, `test_expect_head_detects_a_recomputed_chain`); `ledger/test_backup.py::test_restore_verifies_the_ledger_against_the_recorded_head` | 12 | Partly built: chain, `ledger verify`, `ledger head` with `--expect-head`, and the head in each backup's `.sha256` file are built; the UI badge is planned. Someone who can rewrite both a backup and its sidecar is not detected unless the head is also kept off the server (R20) | engine |
 | A08-6 | Write-once, content-addressed package store; hash checked on every read; no delete path for versions | `ta_store/` | Tampered store file test; no-delete grep and trigger test | 17b | Planned | engine |
 | A08-7 | Relay verifies the package hash before staging | `relay/pmx-relay` | Wrong-hash relay test | 18 | Planned | splunk |
 | A09-1 | Every run step, approval and promotion is a ledger row | `ledger/`, `orchestrator/` | `orchestrator/test_events.py`; `ledger/test_queue.py` | 5 | Built | engine |
@@ -71,7 +71,7 @@
 | A09-3 | Optional forwarding to a `pmx_audit` index with alert templates (login failures, kill switch, integrity failures) | `analytics/` | Forwarding test on fixture data | 19 | Planned | engine |
 | A10-1 | Fail closed in gate and Validator | `guardrails/`, `validator/` | `validator/test_validator_index_time.py::test_warning_check_fails_closed`, `::test_warning_check_error_fails_the_attempt`; Adv. `test_tampered_daily_total_fails_closed` | 2, 4 | Built; fail closed in auth and deploy planned (13, 18) | engine |
 | A10-2 | Timeouts and bounded retries on every Splunk and model call; per-run wall clock | `agents/llm.py`, `tools/splunk_client.py`, `orchestrator/` | `agents/test_agents.py::test_malformed_output_is_retried_then_rejected`; `orchestrator/test_run.py` | 2, 4 | Built | engine |
-| A10-3 | One error envelope (code, message, request id); no stack traces or internal paths to clients | `api/` | Error envelope test per failure branch | 13 | Planned | engine |
+| A10-3 | One error envelope (code, message, request id); no stack traces or internal paths to clients | `api/app.py`, `web/` proxy | `api/test_api.py::test_http_errors_use_the_envelope`, `::test_host_and_csrf_refusals_use_the_envelope`, `::test_body_limit_refusal_uses_the_envelope`, `::test_every_response_has_its_own_request_id`; `web/e2e/proxy.spec.ts` | 12 | Built (Phase 12). Server logs get only the exception type and the request id | engine |
 
 ## OWASP Top 10 for LLM Applications 2025
 
@@ -83,7 +83,7 @@
 | LLM02-2 | Secret scan of samples before any model call | `masking/` | Planted-secret test | 21 | Planned | agents-ai |
 | LLM02-3 | Egress policy per customer; fallback only when allowed | `llm/`, `orchestrator/` | Egress policy test | 16 | Planned | agents-ai |
 | LLM02-4 | No credentials in prompts; API key redacted from probe output | `agents/`, `config.py` (`Settings.__repr__`), `tools/` probes | `tools/test_probes.py::test_failure_output_redacts_api_key` | 1, 2 | Built | agents-ai |
-| LLM03-1 | Provider SDKs pinned (hash lock) | engine lock file | Image build with `--require-hashes` | 12 | Planned (`>=` ranges today) | devops |
+| LLM03-1 | Provider SDKs pinned (hash lock) | `engine/requirements.lock` | See A03-5 | 12 | Built | devops |
 | LLM03-2 | Provider and model recorded per call in the ledger | `llm/`, `ledger/` | Ledger content test | 16 | Planned | agents-ai |
 | LLM04-1 | Knowledge trust tiers; imported docs quarantined until an admin approves; content hashes; re-index on change | `knowledge/` | Poisoning test: an imported doc with instructions changes nothing the gate allows | 20 | Planned | knowledge |
 | LLM05-1 | Strict schema output: every object closed, every property required | `agents/llm.py` (`strict_schema`) | `agents/test_agents.py::test_malformed_output_is_retried_then_rejected` | 2 | Built | agents-ai |
@@ -120,7 +120,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | API1 BOLA | See A01-3 | `api/`, `auth/` | Per-object access tests | 13, 17 | Planned | identity |
 | API2 Broken authentication | See A07-1 to A07-5 | `auth/` | See A07 | 13 | Planned | identity |
-| API3 Broken object property level authorization | `extra="forbid"` on every request body; response models never include secret fields | `api/` models | Test that unknown fields are refused and no response carries a secret | 12, 13 | Planned (bodies today are form fields with length caps) | engine |
+| API3 Broken object property level authorization | `extra="forbid"` on every request body; response models never include secret fields | `api/app.py` models | `api/test_api.py::test_validation_logs_quote_client_chosen_field_names` (an extra field is refused); no-secret response test planned | 12, 13 | Partly built: JSON bodies forbid extra fields; no route returns a secret today, but there is no test for it yet (Phase 13) | engine |
 | API4 Unrestricted resource consumption | Body caps before parsing (built); at most 20 event streams (built); pagination caps and rate limits (planned) | `api/app.py` | `api/test_api.py::test_request_bodies_are_capped_before_parsing` | 5; 13 | Partly built | engine |
 | API5 BFLA | See A01-2 | `auth/` | Role matrix test | 13 | Planned | identity |
 | API6 Sensitive business flows | Approve and promote need the exact state (replay is a no-op); idempotent approve and deploy | `ledger/store.py`, `deploy/` | Adv. `test_replayed_approve_is_a_no_op`; `ledger/test_queue.py::test_db_refuses_a_skipped_transition` | 5; 18 | Built for builds; deployments planned | engine |
@@ -144,22 +144,22 @@
 
 | ID | Control | Where enforced | Test that proves it | Phase | Status | Owner agent |
 | --- | --- | --- | --- | --- | --- | --- |
-| SET-1 | Outside `config/bootstrap`, no code reads `os.environ` for runtime settings | `settings/`, bootstrap module | Test that fails on any other `os.environ` read | 12 | Planned (`api/app.py` and `config.py` read the environment today) | engine |
+| SET-1 | Outside `config/bootstrap`, no code reads `os.environ` for runtime settings | `config.py` | `test_bootstrap.py::test_no_module_outside_bootstrap_reads_os_environ` | 12 | Built | engine |
 | SET-2 | Old `PARSEWRIGHT_*` variables refused at start, naming the new name | `config.py` | `test_config.py::test_old_variable_in_the_environment_is_refused`, `::test_old_variable_in_the_env_file_is_refused` | 11 | Partly built: host CLI and engine refuse them; a Docker `.env` check in `init_env.py` is open | engine |
-| SET-3 | Typed, bounded settings groups; versioned; every change in `settings_history` (secrets only "changed") | `settings/` | Validation and history tests | 12 | Planned | engine |
-| SET-4 | Settings scoped platform, environment, client; reads take the scope explicitly; no "current environment" global | `settings/` | Cross-environment isolation test | 12, 17 | Planned | engine |
-| SET-5 | Jobs read a settings snapshot at start and record its hash | `settings/`, `orchestrator/` | Snapshot test | 12 | Planned | engine |
-| SET-6 | Export and import of non-secret settings only, validated and diffed | `settings/` | Test that an export contains no secret | 12 | Planned | engine |
+| SET-3 | Typed, bounded settings groups; versioned; every change in `settings_history` (secrets only "changed") | `settings/` | `settings/test_settings_service.py::test_bounds_and_unknown_fields_are_refused`, `::test_optimistic_version`, `::test_history_records_every_change_per_scope`, `::test_history_is_append_only_for_the_app_role` | 12 | Built | engine |
+| SET-4 | Settings scoped platform, environment, client; reads take the scope explicitly; no "current environment" global | `settings/` | `settings/test_settings_service.py::test_inheritance_and_sources`, `::test_secret_fields_take_only_a_vault_id_of_the_same_scope`; `secrets/test_vault.py::test_a_secret_resolves_only_in_its_own_scope` | 12, 17 | Partly built: explicit scopes in the service; only the one v1 environment `lab` exists until Phase 17 | engine |
+| SET-5 | Jobs read a settings snapshot at start and record its hash | `settings/`, `orchestrator/` | `settings/test_settings_service.py::test_snapshot_is_hash_addressed_and_frozen_in_time` | 12 | Partly built: the snapshot function exists; jobs do not use it yet (settings are read at process start) | engine |
+| SET-6 | Export and import of non-secret settings only, validated and diffed | `settings/` | `settings/test_settings_service.py::test_export_never_contains_secrets_and_import_round_trips`, `::test_invalid_imports_are_refused_and_change_nothing` | 12 | Built (CLI and service; the UI is Phase 15) | engine |
 
 ## Secrets at rest and on the machine
 
 | ID | Control | Where enforced | Test that proves it | Phase | Status | Owner agent |
 | --- | --- | --- | --- | --- | --- | --- |
-| SEC-1 | Vault design (A04-1); decryption only at the moment of use | `secrets/` | See A04-1 | 12 | Planned | identity |
-| SEC-2 | KEK file `secrets/pmx_kek`: 32 random bytes, mode 0400, git-ignored, Docker secret into the engine only | `Makefile` `setup`/`secrets`, `docker-compose.yml` | Test of file mode and that the web container has no KEK mount | 12 | Planned | devops |
-| SEC-3 | `rotate-kek` rewraps every data key | `secrets/`, `cli.py` | Rotation test | 12 | Planned | identity |
-| SEC-4 | Secrets never returned by the API; `repr` redaction on every model holding one | `secrets/`, `api/` | API and `repr` tests | 12, 13 | Partly built: `Settings.__repr__` redacts today (`tools/test_probes.py::test_failure_output_redacts_api_key`) | identity |
-| SEC-5 | No secrets in container environment variables except bootstrap values; `/proc` exposure noted | `docker-compose.yml`, bootstrap | Compose check | 12 | Planned (tokens are in `.env` today) | devops |
+| SEC-1 | Vault design (A04-1); decryption only at the moment of use | `secrets/`, `config.py` (`Secrets.use`) | `secrets/test_vault.py` (see A04-1; `test_secret_value_never_in_logs_errors_or_history`) | 12 | Built. Long-lived clients (the `openai` and `splunk-sdk` clients) keep the token in memory for the life of the process | identity |
+| SEC-2 | KEK file `secrets/pmx_kek`: 32 random bytes, mode 0400, git-ignored, Docker secret into the engine only | `scripts/make_secrets.py`, `secrets/` (`Kek.load`), `docker-compose.yml` | `tests/test_make_secrets.py::test_creates_every_secret_private_and_quiet`; `secrets/test_vault.py::test_kek_file_readable_by_group_or_others_is_refused`; `tests/test_compose.py::test_secrets_reach_only_the_services_that_need_them` (engine only; not web, not `migrate`) | 12 | Built | devops |
+| SEC-3 | `rotate-kek` rewraps every data key | `secrets/`, `cli.py` | `secrets/test_vault.py::test_rotate_kek_round_trip`, `::test_rotate_kek_is_all_or_nothing`, `::test_rotate_kek_as_the_app_role`, `::test_cli_rotate_kek` | 12 | Built | identity |
+| SEC-4 | Secrets never returned by the API; `repr` redaction on every model holding one | `secrets/`, `config.py`, `api/` | `secrets/test_vault.py::test_kek_repr_and_pickle_never_expose_the_key`; `tools/test_probes.py::test_failure_output_redacts_api_key` | 12, 13 | Partly built: `repr` redaction of the KEK, `Secrets` and `Settings` is built; there are no secret API routes yet (Phase 15 screens) | identity |
+| SEC-5 | No secrets in container environment variables except bootstrap values; `/proc` exposure noted | `docker-compose.yml`, `config.py` | `tests/test_compose.py::test_secrets_reach_only_the_services_that_need_them` | 12 | Partly built: the database passwords and the KEK are files (Docker secrets). `LLM_API_KEY` and `SPLUNK_*_TOKEN` are still accepted as environment overrides, and then they win over the vault, so they are visible in `/proc` and `docker inspect` | devops |
 | SEC-6 | `.env` written atomically with mode 0600; tokens never in process arguments or output | `scripts/env_set.py`, `scripts/init_env.py` | `tests/test_env_scripts.py::test_env_set_stores_tokens_quietly`, `::test_init_generates_placeholder_passwords_and_never_prints_them` | 10 | Built | devops |
 | SEC-7 | Token expiry tracked; warnings at 14 and 3 days | `environments/`, `analytics/` | Expiry warning test | 17 | Planned (sandbox tokens expire after 7 days and are renewed on `make up` today) | splunk |
 
@@ -167,7 +167,7 @@
 
 | ID | Control | Where enforced | Test that proves it | Phase | Status | Owner agent |
 | --- | --- | --- | --- | --- | --- | --- |
-| DATA-1 | Ledger hash chain | `ledger/` | See A08-5 | 12 | Planned | engine |
+| DATA-1 | Ledger hash chain | `ledger/` | See A08-5 | 12 | Partly built (see A08-5) | engine |
 | DATA-2 | Samples and masking maps encrypted at rest | `masking/`, intake | See A04-5 | 21 | Planned | engine |
 | DATA-3 | Real logs deleted 30 days after the job ends at most (per client 0 to 30); purge job hourly and idempotent; reports rewritten with masked lines | purge job in `orchestrator/` or `masking/` | Planted-marker purge test over database and files | 21 | Planned | engine |
 | DATA-4 | `pmx_` test index retention at most 30 days | `scripts/splunk_bootstrap.py` | Bootstrap test of `frozenTimePeriodInSecs` | 21 | Planned (the index is size-capped today, T5.3) | splunk |
@@ -179,12 +179,12 @@
 
 | ID | Control | Where enforced | Test that proves it | Phase | Status | Owner agent |
 | --- | --- | --- | --- | --- | --- | --- |
-| DB-1 | Separate owner and app roles; the app role has no DDL and limited grants; owner credentials only in the one-shot `migrate` service | `ledger/migrations/002`, `003`, `004`, `docker-compose.yml` | `ledger/test_queue.py::test_the_app_role_cannot_rewrite_or_unprotect_the_ledger`; `ledger/test_migrations.py::test_fresh_database_gets_the_new_role_and_names` | 5, 7, 11 | Built | engine |
+| DB-1 | Separate owner and app roles; the app role has no DDL and limited grants; owner credentials only in the one-shot `migrate` service | `ledger/migrations/002` to `006`, `docker-compose.yml` | `ledger/test_queue.py::test_the_app_role_cannot_rewrite_or_unprotect_the_ledger`; `ledger/test_migrations.py::test_fresh_database_gets_the_new_role_and_names`; `secrets/test_vault.py::test_app_role_cannot_move_a_secret_to_another_scope_or_delete_it`; `ledger/test_chain.py::test_app_role_appends_but_cannot_rewrite` | 5, 7, 11, 12 | Built | engine |
 | DB-2 | `analytics_ro` role for read-only views | migrations, `analytics/` | Grant test | 19 | Planned | engine |
 | DB-3 | `scram-sha-256` authentication | PostgreSQL config | Connection test with md5 refused | 12 | Planned (not checked in code today) | devops |
 | DB-4 | TLS `verify-full` when PostgreSQL is not on the internal Docker network | `config.py` (DSN) | DSN test | 12 | Planned | devops |
 | DB-5 | `statement_timeout` on the app role | migrations or DSN | Timeout test | 12 | Planned | engine |
-| DB-6 | Encrypted backups (`pg_dump` to `age`) including the package store; restore tested in CI; retention at most 30 days advised | `cli.py` `backup`, `.github/workflows/ci.yml`, `docs/setup.md` | Restore test in CI | 12, 17b | Planned | devops |
+| DB-6 | Encrypted backups (`pg_dump` to `age`) including the package store; restore tested in CI; retention at most 30 days advised | `ledger/backup.py`, `cli.py` `backup` / `restore`, `scripts/backup.sh`, `scripts/restore.sh`, `.github/workflows/ci.yml` job `restore-test` | `ledger/test_backup.py` (round trip, modes and 30-day pruning, checksum refusal, ledger head); `scripts/restore_test.sh` in CI | 12, 17b | Partly built: database backup with a `.sha256` sidecar, 30-day pruning, restore that refuses a missing or mismatched sidecar, and the CI round trip are built; the package store is not covered until Phase 17b | devops |
 | DB-7 | Rename migration is safe to run twice; the v1 volumes are backed up before they are copied (005 itself takes no backup) | `ledger/migrations/005_rename_to_parsemaxxing.sql`, `scripts/migrate_v1_volumes.sh` | `ledger/test_migrations.py::test_005_is_safe_to_run_twice`; `tests/test_migrate_v1_volumes.py::test_non_empty_new_volume_is_never_overwritten` | 11 | Built | devops |
 | DB-8 | A leftover `parsewright_app` role that cannot be dropped loses its login | `005_rename_to_parsemaxxing.sql` | `ledger/test_migrations.py` | 11 | Built | engine |
 | BLD-1 | The repo-root build context exposes only `LICENSE` and `NOTICE` (root `.dockerignore`) | `.dockerignore`, `docker-compose.yml` | Manual build check in Phase 11; automated in Phase 12 | 11 | Built | devops |
@@ -196,19 +196,19 @@
 | ID | Control | Where enforced | Test that proves it | Phase | Status | Owner agent |
 | --- | --- | --- | --- | --- | --- | --- |
 | DK-1 | Non-root images | `engine/Dockerfile` (`USER parsemaxxing`), `web/Dockerfile` (`USER node`) | None automated; appsec review | 5, 6 | Built; automated check planned (12) | devops |
-| DK-2 | `no-new-privileges`, `cap_drop: ALL`, read-only root filesystem for engine and web | `docker-compose.yml` | None automated; appsec review (`docker compose config`) | 5, 6 | Built; automated check planned (12) | devops |
-| DK-3 | No Docker socket in any container | `docker-compose.yml` | None automated; appsec review | 1 | Built; automated check planned (12) | devops |
-| DK-4 | Published ports on `127.0.0.1` only; Splunk REST 8089 unpublished | `docker-compose.yml` | None automated; appsec review | 5, 10 | Built; HTTPS profile with a reverse proxy planned (12) | devops |
-| DK-5 | Separate networks (Splunk cannot reach the engine API; database not reachable from web) | `docker-compose.yml` | Compose network test | 12 | Planned (R10) | devops |
-| DK-6 | Secrets as files (Docker secrets); KEK never in the web container | `docker-compose.yml` | See SEC-2 | 12 | Planned | devops |
-| DK-7 | CPU, memory and PID limits per container | `docker-compose.yml` | Compose check | 12 | Planned | devops |
+| DK-2 | `no-new-privileges`, `cap_drop: ALL`, read-only root filesystem for engine and web | `docker-compose.yml` | `tests/test_compose.py::test_hardening_and_limits_on_every_service` (every service except Splunk, R17) | 5, 6, 12 | Built | devops |
+| DK-3 | No Docker socket in any container | `docker-compose.yml` | `tests/test_compose.py::test_hardening_and_limits_on_every_service` | 1, 12 | Built | devops |
+| DK-4 | Published ports on `127.0.0.1` only; Splunk REST 8089 unpublished | `docker-compose.yml`, `scripts/up.sh` | `tests/test_compose.py::test_published_ports_are_loopback_and_postgres_is_not_published`; `tests/test_up_bind.py` | 5, 10, 12 | Built, with the `https` profile. `make up` refuses a non-loopback `HTTPS_BIND` unless `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes`, until login lands in Phase 13 | devops |
+| DK-5 | Separate networks (Splunk cannot reach the engine API; database not reachable from web) | `docker-compose.yml` | `tests/test_compose.py::test_networks_separate_splunk_web_and_database` | 12 | Built (R10 narrowed) | devops |
+| DK-6 | Secrets as files (Docker secrets); KEK never in the web container | `docker-compose.yml` | See SEC-2 | 12 | Built for the KEK and the database passwords; the LLM key and Splunk tokens can still come from the environment (SEC-5) | devops |
+| DK-7 | CPU, memory and PID limits per container | `docker-compose.yml` | `tests/test_compose.py::test_hardening_and_limits_on_every_service` | 12 | Built | devops |
 
 ## Supply chain
 
 | ID | Control | Where enforced | Test that proves it | Phase | Status | Owner agent |
 | --- | --- | --- | --- | --- | --- | --- |
 | SC-1 | Actions pinned by SHA; CI uses `pull_request` with `contents: read` and no secrets | `.github/workflows/ci.yml` | appsec review; semgrep | 0 | Built | devops |
-| SC-2 | Images by digest; Python lock with hashes; SBOM; Trivy | see A03-4 to A03-6 | see A03 | 12 | Planned (R12) | devops |
+| SC-2 | Images by digest; Python lock with hashes; SBOM; Trivy | see A03-4 to A03-6 | see A03 | 12 | Built (R12 closed) | devops |
 | SC-3 | Third-party content keeps its licence: `splunk-agent-skills` pinned with its `LICENSE` and listed in `THIRD_PARTY_NOTICES.md` | `third_party/`, `THIRD_PARTY_NOTICES.md` | Licence file check | 20 | Planned | knowledge |
 | SC-4 | No Splunk documentation or licensed Splunk files in the repo | repository | appsec review; parser tests use files written for the tests | 11 onward | Built as a review rule | appsec |
 | SC-5 | Relay package verified against its `SHA256SUMS` on install | `relay/` | Relay install test | 18 | Planned | devops |

@@ -29,6 +29,7 @@ Parsemaxxing v2 is under development and has no 2.0.0 release yet. Only the late
 
 - `.env` is git-ignored; `.env.example` holds placeholders only.
 - gitleaks runs on every commit (pre-commit) and over the full git history in CI.
+- At runtime, the LLM key and the Splunk tokens can be kept in an encrypted vault (AES-256-GCM under a key-encryption key in a Docker secret, `secrets/pmx_kek`); `docs/setup.md` says how to back up that key. Database backups are encrypted with `age`.
 - Runtime guardrails are described in [docs/design.md](docs/design.md), section "Guardrails and security", and the threat model in [docs/threat-model.md](docs/threat-model.md).
 
 ## Real log retention
