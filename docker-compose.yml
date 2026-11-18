@@ -47,7 +47,10 @@ services:
   # One-shot: migrations and the app role's password. The only service with the database
   # owner's credentials; the engine itself connects as the limited parsemaxxing_app role.
   migrate:
-    build: ./engine
+    build:
+      context: ./engine
+      additional_contexts:
+        repo: .
     command: ["parsemaxxing", "--env-file", "/dev/null", "migrate"]
     environment:
       MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -64,7 +67,10 @@ services:
   # The engine (API + worker pool), non-root, no Docker socket, no capabilities, read-only
   # root filesystem.
   engine:
-    build: ./engine
+    build:
+      context: ./engine
+      additional_contexts:
+        repo: .
     ports:
       - "127.0.0.1:${ENGINE_PORT:-8080}:8080"
     volumes:
@@ -97,7 +103,10 @@ services:
     restart: unless-stopped
 
   web:
-    build: ./web
+    build:
+      context: ./web
+      additional_contexts:
+        repo: .
     environment:
       ENGINE_URL: http://engine:8080
       # The browser reaches the UI only by these names (DNS-rebinding guard, threat T8.5).

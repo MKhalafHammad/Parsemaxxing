@@ -1,0 +1,43 @@
+Parsemaxxing
+Start parsemaxxing your logs.
+
+Required Notice: Copyright (c) 2026 Mohamed K. Hammad (https://parsemaxxing.com)
+
+Licence
+-------
+This software is licensed under the PolyForm Shield License 1.0.0
+(https://polyformproject.org/licenses/shield/1.0.0). The full text is in
+the LICENSE file. Anyone who passes on a copy of any part of this software
+must pass on this NOTICE file, including the Required Notice line above.
+
+In plain words (the LICENSE text is what counts): you may use, change and
+run this software for any purpose, including inside your company or an
+MSSP serving its own clients, except to provide a product or service that
+competes with it, whether paid or free.
+
+Earlier versions
+----------------
+Versions up to and including v1.0.0, released as "Parsewright", were
+licensed under the MIT License. Those versions keep that licence. The
+PolyForm Shield License applies to everything after the v1.0.0 tag,
+including every 2.x release.
+
+Name and logo
+-------------
+The licence does not grant any right to use the names "Parsemaxxing" or
+"Parsewright", the tagline or the logo. See TRADEMARKS.md.
+
+Generated add-ons
+-----------------
+Splunk add-ons that this software generates for you (for example
+TA-parsemaxxing-<vendor>-<product>) contain your own configuration and are
+yours to use, change and share. They are not subject to the PolyForm Shield
+License.
+
+Third-party software
+--------------------
+This software includes third-party components under their own licences.
+See THIRD_PARTY_NOTICES.md.
+
+Splunk is a trademark of Splunk LLC. Parsemaxxing is not affiliated with,
+sponsored by or endorsed by Splunk LLC or Cisco.

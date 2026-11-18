@@ -94,6 +94,9 @@ def test_package_contents_and_hash(tmp_path):
         f"{APP}/metadata/default.meta",
     ]
     assert meta.startswith("[]\n")
+    # Generated add-ons are the user's: no LICENSE file and no PolyForm text (NOTICE).
+    with tarfile.open(pkg.path) as tar:
+        assert not any(b"PolyForm" in tar.extractfile(m).read() for m in tar if m.isfile())
     assert pkg.sha256 == package.sha256(pkg.path)
     assert pkg.path.stat().st_mode & 0o777 == 0o644
 

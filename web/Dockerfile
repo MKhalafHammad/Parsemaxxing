@@ -10,10 +10,13 @@ COPY . .
 RUN npm run build
 
 FROM node:24-slim
+LABEL org.opencontainers.image.licenses="LicenseRef-PolyForm-Shield-1.0.0"
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
+# LICENSE and NOTICE come from the repo root (compose additional context "repo").
+COPY --from=repo LICENSE NOTICE ./
 USER node
 EXPOSE 3000
 CMD ["node", "server.js"]

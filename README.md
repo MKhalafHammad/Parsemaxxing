@@ -5,7 +5,7 @@
 From raw sample logs to a tested, CIM-compliant Splunk add-on, verified by Splunk rather than by the model.
 
 [![CI](https://github.com/MKhalafHammad/Parsemaxxing/actions/workflows/ci.yml/badge.svg)](https://github.com/MKhalafHammad/Parsemaxxing/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Shield 1.0.0](https://img.shields.io/badge/license-PolyForm%20Shield%201.0.0-blue.svg)](LICENSE)
 
 - **Demo video:** [watch the 3-minute demo on YouTube](https://www.youtube.com/watch?v=WsxSCXF_JRs)
 - **Setup:** [step-by-step guide](docs/setup.md)
@@ -139,6 +139,8 @@ First released as Parsewright: [v1.0.0](https://github.com/MKhalafHammad/Parsema
 
 Splunk, Splunk Enterprise and Splunkbase are trademarks or registered trademarks of Splunk LLC in the United States and other countries. Meta is a trademark of Meta Platforms, Inc. Parsemaxxing is an independent project; it is not affiliated with, sponsored or endorsed by Splunk or Cisco. No Splunk software is included in this repository, only the CIM field names and allowed values the Validator checks against (`engine/parsemaxxing/cim_spec/`), as published in Splunk's CIM documentation: `make up` pulls the official `splunk/splunk` image, whose license you accept in `.env`, and you download the CIM add-on yourself.
 
-## License
+## Licence
 
-[MIT](LICENSE) © 2026 Mohamed K. Hammad
+Parsemaxxing is source-available, not open source. Versions up to and including v1.0.0 (released as Parsewright) are under the MIT License and stay that way. Everything after v1.0.0, including v2, is under the [PolyForm Shield License 1.0.0](LICENSE): you may use, change and run it for any purpose, including inside your company or as an MSSP serving your own clients, but not to offer a product or service that competes with it, paid or free. Add-ons it generates for you are yours. The name and logo are covered by [TRADEMARKS.md](TRADEMARKS.md), and third-party components keep their own licences ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+
+© 2026 Mohamed K. Hammad. See [NOTICE](NOTICE).

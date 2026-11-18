@@ -206,6 +206,10 @@ Splunk Web is at http://localhost:8000 (user `admin`, password `SPLUNK_PASSWORD`
 3. Run `make up`. It backs up the old `parsewright_*` volumes into `backups/`, copies them into the new `parsemaxxing_*` volumes, and leaves the old ones in place. The database migration renames the app role to `parsemaxxing_app`.
 4. Add-ons you already built keep their `TA-parsewright-*` names and can still be updated and rolled back. New add-ons are named `TA-parsemaxxing-*`. The old `pw_test` index is left alone; remove it by hand when you no longer need it.
 
+## Licence
+
+Parsemaxxing is source-available, not open source. Versions up to and including v1.0.0 (released as Parsewright) are under the MIT License and stay that way. Everything after v1.0.0, including v2, is under the [PolyForm Shield License 1.0.0](../LICENSE): you may use, change and run it for any purpose, including inside your company or as an MSSP serving your own clients, but not to offer a product or service that competes with it, paid or free. Add-ons it generates for you are yours. The name and logo are covered by [TRADEMARKS.md](../TRADEMARKS.md), and third-party components keep their own licences ([THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)).
+
 ## Stop, restart or reset
 
 ```bash
