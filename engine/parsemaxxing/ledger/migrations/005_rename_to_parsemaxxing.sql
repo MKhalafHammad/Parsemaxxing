@@ -17,7 +17,8 @@ BEGIN
             BEGIN
                 DROP ROLE parsewright_app;
             EXCEPTION WHEN dependent_objects_still_exist THEN
-                NULL;  -- still granted in another database: that database's 005 drops it
+                -- Still granted in another database (whose 005 drops it): disable its login now.
+                ALTER ROLE parsewright_app NOLOGIN PASSWORD NULL;
             END;
         END IF;
     ELSIF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'parsemaxxing_app') THEN
