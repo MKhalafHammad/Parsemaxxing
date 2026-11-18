@@ -7,7 +7,7 @@ name = "parsemaxxing"
 version = "0.0.0"
 description = "Turns raw sample logs into a tested, CIM-compliant Splunk add-on."
 readme = "README.md"
-license = "MIT"
+license = { file = "LICENSE" }
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.162",

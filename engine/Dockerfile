@@ -2,11 +2,14 @@
 # Non-root, slim, no Docker socket (threat T7.5): the engine reaches Splunk over REST only.
 # Pinned by tag, not digest: residual risk R12 in docs/threat-model.md.
 FROM python:3.12-slim
+LABEL org.opencontainers.image.licenses="LicenseRef-PolyForm-Shield-1.0.0"
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 COPY pyproject.toml README.md ./
+# LICENSE and NOTICE come from the repo root (compose additional context "repo").
+COPY --from=repo LICENSE NOTICE ./
 COPY parsemaxxing ./parsemaxxing
 RUN pip install --no-cache-dir . \
     && useradd --system --uid 10001 --home-dir /app parsemaxxing \
