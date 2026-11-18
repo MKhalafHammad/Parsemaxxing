@@ -1,6 +1,7 @@
 """docker-compose.yml and the Dockerfiles keep the container baseline (security-baseline DK-1 to
 DK-7, SC-2): read from the files, so no Docker daemon is needed."""
 
+import ipaddress
 import re
 from pathlib import Path
 
@@ -75,6 +76,18 @@ def test_networks_separate_splunk_web_and_database() -> None:
     for name in SERVICES:
         if "data" in networks(name):
             assert name in {"postgres", "migrate", "engine", "postgres-cli"}, name
+
+
+def test_engine_trusts_only_the_web_container_for_forwarded_ips() -> None:
+    """Trusting a wider range (or none) would let a client fake its IP, or make per-IP lockout
+    lock every user at once behind the web container."""
+    web_ip = SERVICES["web"]["networks"]["app"]["ipv4_address"]
+    assert SERVICES["engine"]["environment"]["PARSEMAXXING_TRUSTED_PROXIES"] == web_ip
+    (pool,) = COMPOSE["networks"]["app"]["ipam"]["config"]
+    assert ipaddress.ip_address(web_ip) in ipaddress.ip_network(pool["subnet"])
+    # Dynamic addresses come from ip_range, so no other container can take the web's address.
+    assert ipaddress.ip_address(web_ip) not in ipaddress.ip_network(pool["ip_range"])
+    assert {name for name in SERVICES if "app" in networks(name)} == {"web", "engine"}
 
 
 def test_secrets_reach_only_the_services_that_need_them() -> None:

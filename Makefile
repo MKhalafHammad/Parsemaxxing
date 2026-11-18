@@ -1,6 +1,6 @@
 # Parsemaxxing developer commands. Run `make setup` once after cloning.
 .PHONY: setup env secrets up first-run down logs test e2e lint security lock digests sbom scan \
-	backup restore restore-test
+	backup restore restore-test setup-token
 
 VENV := .venv
 BIN := $(VENV)/bin
@@ -31,6 +31,10 @@ up:
 # Upload the bundled synthetic sample and follow it to the approval report.
 first-run:
 	python3 scripts/first_run.py
+
+# While no admin exists: a new one-time setup token from the running engine, to this terminal.
+setup-token:
+	$(or $(DOCKER),docker) compose exec engine parsemaxxing --env-file /dev/null setup-token
 
 down:
 	docker compose down

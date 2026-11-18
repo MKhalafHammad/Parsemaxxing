@@ -185,6 +185,9 @@ services:
       WEB_ORIGIN: http://localhost:${WEB_PORT:-3000}
       SPLUNK_HOST: splunk
       SPLUNK_PORT: "8089"
+      # Only the web container's X-Forwarded-For names the client (per-IP lockout); the https
+      # proxy talks to web, never to the engine.
+      PARSEMAXXING_TRUSTED_PROXIES: 172.30.10.10
       LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL in .env}
       LLM_MODEL: ${LLM_MODEL:?set LLM_MODEL in .env}
       # Transitional fallback: used only while the vault has no value for them. After
@@ -224,7 +227,10 @@ services:
       WEB_ORIGINS: http://localhost:${WEB_PORT:-3000},http://127.0.0.1:${WEB_PORT:-3000},https://${PMX_PUBLIC_HOST:-localhost}:${HTTPS_PORT:-8443},https://${PMX_PUBLIC_HOST:-localhost}
     ports:
       - "127.0.0.1:${WEB_PORT:-3000}:3000"
-    networks: [edge, app]
+    networks:
+      edge: {}
+      app:
+        ipv4_address: 172.30.10.10 # the engine's PARSEMAXXING_TRUSTED_PROXIES
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m
     healthcheck:
@@ -244,8 +250,8 @@ services:
   # with HSTS (scripts/Caddyfile). PMX_PUBLIC_HOST is the host name the browser uses (default
   # localhost), HTTPS_PORT the published port (default 8443); PMX_TLS is "internal" (Caddy's own
   # CA, kept in the caddy-data volume) or "/certs/<cert>.pem /certs/<key>.pem" for an admin
-  # certificate in ./certs. A non-loopback HTTPS_BIND exposes the login-less UI beyond this
-  # machine; `make up` refuses it unless PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes.
+  # certificate in ./certs. A non-loopback HTTPS_BIND exposes the UI beyond this machine before
+  # the Phase 14 hardening; `make up` refuses it unless PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes.
   https:
     profiles: [https]
     image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
@@ -298,6 +304,12 @@ networks:
   edge: {}
   app:
     internal: true
+    ipam:
+      config:
+        # Fixed so the web container's address is known; others get addresses from ip_range,
+        # which excludes the web container's.
+        - subnet: 172.30.10.0/24
+          ip_range: 172.30.10.128/25
   data:
     internal: true
   splunk_api:
