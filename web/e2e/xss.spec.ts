@@ -68,7 +68,7 @@ test("a parser update's diff, overrides and old event render as text, with no di
   const base = run("awaiting_approval");
   const oldRaw = `ts=1792483219000 action=accept src=${XSS}`;
   const update = {
-    app: "TA-parsewright-acme-fw",
+    app: "TA-parsemaxxing-acme-fw",
     version_from: "1.0.0",
     version_to: "1.1.0",
     patched: ["cim"],
@@ -84,9 +84,9 @@ test("a parser update's diff, overrides and old event render as text, with no di
     overrides: [`TIME_FORMAT: Splunk applies '${XSS}' from local/ or another app`],
     notes: ["Search-time changes apply to events already indexed as soon as it is promoted."],
     old_event: { time: 1792483219, raw: oldRaw, fields: {}, highlights: [] },
-    rollback: "parsewright rollback TA-parsewright-acme-fw 1.0.0",
+    rollback: "parsemaxxing rollback TA-parsemaxxing-acme-fw 1.0.0",
   };
-  const body = { ...base, form: { update_of: "TA-parsewright-acme-fw" }, record: { ...base.record, report: { ...base.record.report, update } } };
+  const body = { ...base, form: { update_of: "TA-parsemaxxing-acme-fw" }, record: { ...base.record, report: { ...base.record.report, update } } };
   await mockRun(page, body);
   await page.goto("/runs/e2e00001");
 
@@ -125,9 +125,9 @@ test("no diff view anywhere shows unified-diff markers", async ({ page }) => {
 test("an update recorded before structured changes shows its stored diff as rows, without markers", async ({ page }) => {
   const base = run("awaiting_approval");
   const update = {
-    app: "TA-parsewright-acme-fw", version_from: "1.0.0", version_to: "1.1.0", patched: ["index-time"],
+    app: "TA-parsemaxxing-acme-fw", version_from: "1.0.0", version_to: "1.1.0", patched: ["index-time"],
     diff: { "default/props.conf": "--- production/default/props.conf\n+++ update/default/props.conf\n@@ -1,4 +1,4 @@\n [acme:fw]\n-TIME_FORMAT = %s%3N\n TIME_PREFIX = ts=\n-MAX_TIMESTAMP_LOOKAHEAD = 20\n+MAX_TIMESTAMP_LOOKAHEAD = 30\n@@ -9,1 +9,2 @@\n+EVAL-src = coalesce(src,src_ip)" },
-    overrides: [], notes: [], old_event: null, rollback: "parsewright rollback TA-parsewright-acme-fw 1.0.0",
+    overrides: [], notes: [], old_event: null, rollback: "parsemaxxing rollback TA-parsemaxxing-acme-fw 1.0.0",
   };
   await mockRun(page, { ...base, record: { ...base.record, report: { ...base.record.report, update } } });
   await page.goto("/runs/e2e00001?phase=approval");

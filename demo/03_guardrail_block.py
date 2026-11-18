@@ -14,14 +14,14 @@ first two CIM proposals are replaced by an attacker's, clearly labelled SIMULATE
 
 import sys
 
-from parsewright.agents.cim_mapper import CimProposal, Eval, EventType
-from parsewright.agents.llm import LLMClient
-from parsewright.config import REPO, Settings, load_env_file
-from parsewright.orchestrator.caps import IngestCaps
-from parsewright.orchestrator.run import run
-from parsewright.tools.splunk_client import SplunkClient
+from parsemaxxing.agents.cim_mapper import CimProposal, Eval, EventType
+from parsemaxxing.agents.llm import LLMClient
+from parsemaxxing.config import REPO, Settings, load_env_file
+from parsemaxxing.orchestrator.caps import IngestCaps
+from parsemaxxing.orchestrator.run import run
+from parsemaxxing.tools.splunk_client import SplunkClient
 
-FIXTURE = REPO / "engine/parsewright/generator/fixtures/acme_vpn_injected.json"
+FIXTURE = REPO / "engine/parsemaxxing/generator/fixtures/acme_vpn_injected.json"
 ATTACKS = [
     CimProposal(
         aliases=[],

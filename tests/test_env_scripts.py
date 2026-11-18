@@ -26,7 +26,7 @@ def repo(tmp_path: Path) -> Path:
         "SPLUNK_PASSWORD=changeme-to-a-long-password\n"
         "POSTGRES_PASSWORD=changeme-to-a-long-password\n"
         "POSTGRES_APP_PASSWORD=changeme-to-another-long-password\n"
-        "SPLUNK_SEARCH_TOKEN=your-parsewright-search-token-here\n"
+        "SPLUNK_SEARCH_TOKEN=your-parsemaxxing-search-token-here\n"
         "WEB_PORT=3000\n"
     )
     return tmp_path

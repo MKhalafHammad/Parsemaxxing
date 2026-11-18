@@ -2,7 +2,7 @@ import tarfile
 
 import pytest
 
-from parsewright.tools.probes.probe_install import (
+from parsemaxxing.tools.probes.probe_install import (
     APP,
     PROPS_V1,
     SOURCETYPE_V1,
@@ -28,8 +28,8 @@ def test_package_holds_only_the_app_folder(tmp_path):
     assert package.stat().st_mode & 0o777 == 0o644
 
 
-def test_test_identity_and_pw_naming():
-    assert APP.startswith("TA-parsewright-") and APP.endswith("__test_probe")
+def test_test_identity_and_pmx_naming():
+    assert APP.startswith("TA-parsemaxxing-") and APP.endswith("__test_probe")
     assert SOURCETYPE_V1.endswith("__test_probe")
 
 
@@ -41,29 +41,29 @@ def test_expected_epochs_use_the_probe_timezone():
 
 @pytest.mark.parametrize("raw", ["", "relative/dir"])
 def test_packages_dir_must_be_absolute(monkeypatch, raw):
-    monkeypatch.setenv("PARSEWRIGHT_PACKAGES_DIR", raw)
+    monkeypatch.setenv("PARSEMAXXING_PACKAGES_DIR", raw)
     with pytest.raises(ValueError):
         packages_dir()
 
 
 def test_packages_dir_must_exist(monkeypatch, tmp_path):
-    monkeypatch.setenv("PARSEWRIGHT_PACKAGES_DIR", str(tmp_path / "missing"))
+    monkeypatch.setenv("PARSEMAXXING_PACKAGES_DIR", str(tmp_path / "missing"))
     with pytest.raises(ValueError):
         packages_dir()
-    monkeypatch.setenv("PARSEWRIGHT_PACKAGES_DIR", str(tmp_path))
+    monkeypatch.setenv("PARSEMAXXING_PACKAGES_DIR", str(tmp_path))
     assert packages_dir() == tmp_path.resolve()
 
 
-@pytest.mark.parametrize("raw", ["", "main", "pw", "pw_x OR index=main", "_internal"])
-def test_test_index_must_be_a_pw_index(monkeypatch, raw):
-    monkeypatch.setenv("PARSEWRIGHT_TEST_INDEX", raw)
+@pytest.mark.parametrize("raw", ["", "main", "pw", "pmx_x OR index=main", "_internal"])
+def test_test_index_must_be_a_pmx_index(monkeypatch, raw):
+    monkeypatch.setenv("PARSEMAXXING_TEST_INDEX", raw)
     with pytest.raises(ValueError):
         shared_index()
 
 
-def test_test_index_accepts_pw_name(monkeypatch):
-    monkeypatch.setenv("PARSEWRIGHT_TEST_INDEX", "pw_test")
-    assert shared_index() == "pw_test"
+def test_test_index_accepts_pmx_name(monkeypatch):
+    monkeypatch.setenv("PARSEMAXXING_TEST_INDEX", "pmx_test")
+    assert shared_index() == "pmx_test"
 
 
 def test_packages_dir_rejects_symlink(monkeypatch, tmp_path):
@@ -71,7 +71,7 @@ def test_packages_dir_rejects_symlink(monkeypatch, tmp_path):
     real.mkdir()
     link = tmp_path / "link"
     link.symlink_to(real)
-    monkeypatch.setenv("PARSEWRIGHT_PACKAGES_DIR", str(link))
+    monkeypatch.setenv("PARSEMAXXING_PACKAGES_DIR", str(link))
     with pytest.raises(ValueError, match="not a link"):
         packages_dir()
 
@@ -80,7 +80,7 @@ def test_packages_dir_rejects_group_or_world_writable(monkeypatch, tmp_path):
     loose = tmp_path / "loose"
     loose.mkdir()
     loose.chmod(0o777)
-    monkeypatch.setenv("PARSEWRIGHT_PACKAGES_DIR", str(loose))
+    monkeypatch.setenv("PARSEMAXXING_PACKAGES_DIR", str(loose))
     with pytest.raises(ValueError, match="writable"):
         packages_dir()
 

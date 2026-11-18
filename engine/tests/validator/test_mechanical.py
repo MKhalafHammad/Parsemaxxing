@@ -5,9 +5,9 @@ import json
 import pytest
 from conftest import FIXTURES
 
-from parsewright.agents.profiler import FieldInfo, LogProfile
-from parsewright.validator import mechanical
-from parsewright.validator.mechanical import (
+from parsemaxxing.agents.profiler import FieldInfo, LogProfile
+from parsemaxxing.validator import mechanical
+from parsemaxxing.validator.mechanical import (
     check_times_from_raw,
     check_zone,
     compare,
@@ -215,7 +215,7 @@ def test_updates_compare_with_productions_own_output_exactly():
 
 # --- CIM meaning guards (found in the lab: required fields filled with the wrong meaning) -----
 
-from parsewright.validator.mechanical import check_directions, check_invented  # noqa: E402
+from parsemaxxing.validator.mechanical import check_directions, check_invented  # noqa: E402
 
 LAB_PROPS = {  # what the CIM mapper proposed for a VPN log with no manifest
     "FIELDALIAS-dest_port": "dest_port AS dest_port",
@@ -284,7 +284,7 @@ def test_a_correct_constant_from_a_multi_source_eval_is_not_called_faked():
 
 # --- appsec review, Nov 2: each finding as an adversarial test ---------------------------------
 
-from parsewright.validator.mechanical import (  # noqa: E402
+from parsemaxxing.validator.mechanical import (  # noqa: E402
     RECORD_START,
     UNCONFIRMED,
     bounded,

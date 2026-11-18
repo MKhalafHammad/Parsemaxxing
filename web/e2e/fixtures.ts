@@ -21,7 +21,7 @@ export function run(status: string, extra: Record<string, unknown> = {}) {
     },
     record: {
       sha256_test: "a".repeat(64),
-      test_app: "TA-parsewright-acme-vpn__test_e2e00001",
+      test_app: "TA-parsemaxxing-acme-vpn__test_e2e00001",
       report: {
         events: [{
           time: 1792483246, raw,
@@ -61,7 +61,7 @@ export const LEDGER = [
   { id: 4, at: "2026-10-28T10:00:04Z", event: "state", data: { from: ["profile_review"], to: "queued" } },
   log(5, { ...att("index-time", 1), actor: "index_time", kind: "start", line: "index-time attempt 1: sourcetype acme:vpn__test_e2e00001_a1", detail: { max_attempts: 5 } }),
   log(6, { ...att("index-time", 1), actor: "index_time", kind: "proposal", detail: { settings: { LINE_BREAKER: "([\\r\\n]+)", SHOULD_LINEMERGE: "false", TIME_FORMAT: "%Y-%m-%dT%H:%M:%SZ" } } }),
-  log(7, { ...att("index-time", 1), actor: "orchestrator", kind: "deploy", detail: { app: "TA-parsewright-acme-vpn__test_e2e00001", version: "0.0.1", sourcetype: "acme:vpn__test_e2e00001_a1" } }),
+  log(7, { ...att("index-time", 1), actor: "orchestrator", kind: "deploy", detail: { app: "TA-parsemaxxing-acme-vpn__test_e2e00001", version: "0.0.1", sourcetype: "acme:vpn__test_e2e00001_a1" } }),
   log(8, { ...att("index-time", 1), actor: "orchestrator", kind: "ingest", detail: { sets: [{ source: "acme_vpn.log", events: 300 }] } }),
   log(9, { ...att("index-time", 1), actor: "validator", kind: "check_pass", detail: pass("event count") }),
   log(10, { ...att("index-time", 1), actor: "validator", kind: "check_pass" }),

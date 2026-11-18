@@ -18,10 +18,10 @@ import time
 from pathlib import Path
 
 import httpx
-from parsewright.generator import synth
+from parsemaxxing.generator import synth
 
-API = os.environ.get("PARSEWRIGHT_API", "http://127.0.0.1:8080")
-UI = os.environ.get("PARSEWRIGHT_UI", "http://localhost:3000")
+API = os.environ.get("PARSEMAXXING_API", "http://127.0.0.1:8080")
+UI = os.environ.get("PARSEMAXXING_UI", "http://localhost:3000")
 
 
 def fresh(folder: Path, mode: str) -> Path:
@@ -51,7 +51,7 @@ def fresh(folder: Path, mode: str) -> Path:
 
 
 def main(mode: str) -> int:
-    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsewright": "1"})
+    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsemaxxing": "1"})
     with tempfile.TemporaryDirectory() as tmp:
         log = fresh(Path(tmp), mode)
         r = c.post(

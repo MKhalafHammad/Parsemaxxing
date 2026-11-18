@@ -3,7 +3,7 @@ requires = ["hatchling>=1.32"]
 build-backend = "hatchling.build"
 
 [project]
-name = "parsewright"
+name = "parsemaxxing"
 version = "0.0.0"
 description = "Turns raw sample logs into a tested, CIM-compliant Splunk add-on."
 readme = "README.md"
@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-parsewright = "parsewright.cli:main"
+parsemaxxing = "parsemaxxing.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -34,7 +34,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["parsewright"]
+packages = ["parsemaxxing"]
 
 [tool.ruff]
 line-length = 100

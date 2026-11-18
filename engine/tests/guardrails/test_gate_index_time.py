@@ -1,6 +1,6 @@
 import pytest
 
-from parsewright.guardrails.index_time import GuardrailBlock, gate
+from parsemaxxing.guardrails.index_time import GuardrailBlock, gate
 
 GOOD = {
     "SHOULD_LINEMERGE": "false",

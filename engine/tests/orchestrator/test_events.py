@@ -5,9 +5,9 @@ import json
 import pytest
 from conftest import collect_events as collector
 
-from parsewright.orchestrator import events
-from parsewright.orchestrator.run import print_report, report_detail, report_lines
-from parsewright.validator.index_time import Check, Report
+from parsemaxxing.orchestrator import events
+from parsemaxxing.orchestrator.run import print_report, report_detail, report_lines
+from parsemaxxing.validator.index_time import Check, Report
 
 KEYS = {"stage", "attempt", "visit", "actor", "kind", "detail"}
 

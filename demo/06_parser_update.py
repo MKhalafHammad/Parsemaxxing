@@ -15,11 +15,11 @@ import time
 from pathlib import Path
 
 import httpx
-from parsewright.generator import synth
+from parsemaxxing.generator import synth
 
-API = os.environ.get("PARSEWRIGHT_API", "http://127.0.0.1:8080")
-UI = os.environ.get("PARSEWRIGHT_UI", "http://localhost:3000")
-FX = Path(__file__).resolve().parents[1] / "engine/parsewright/generator/fixtures"
+API = os.environ.get("PARSEMAXXING_API", "http://127.0.0.1:8080")
+UI = os.environ.get("PARSEMAXXING_UI", "http://localhost:3000")
+FX = Path(__file__).resolve().parents[1] / "engine/parsemaxxing/generator/fixtures"
 
 
 def fresh_v2(folder: Path) -> tuple[Path, Path]:
@@ -40,7 +40,7 @@ def fresh_v2(folder: Path) -> tuple[Path, Path]:
 
 
 def main(mode: str, app: str) -> int:
-    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsewright": "1"})
+    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsemaxxing": "1"})
     tas = {t["app"]: t for t in c.get("/tas").json()}
     if app not in tas:
         print(
@@ -82,4 +82,4 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     mode = args[0] if args and args[0] in ("patch", "diagnose") else "patch"
     rest = args[1:] if args and args[0] in ("patch", "diagnose") else args
-    sys.exit(main(mode, rest[0] if rest else "TA-parsewright-acme-fwdemo"))
+    sys.exit(main(mode, rest[0] if rest else "TA-parsemaxxing-acme-fwdemo"))

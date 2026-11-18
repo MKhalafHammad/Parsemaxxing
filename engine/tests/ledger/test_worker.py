@@ -6,8 +6,8 @@ import shutil
 import pytest
 from conftest import FIXTURES, PROFILE, FakeSplunk, fake_llm, proposal, settings, vpn_events
 
-from parsewright.orchestrator import worker as worker_mod
-from parsewright.orchestrator.run import RunAborted
+from parsemaxxing.orchestrator import worker as worker_mod
+from parsemaxxing.orchestrator.run import RunAborted
 
 
 @pytest.fixture

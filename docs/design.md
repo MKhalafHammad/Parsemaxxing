@@ -1,10 +1,10 @@
-# Parsewright — Design Overview
+# Parsemaxxing — Design Overview
 
 > Source of truth for development. Last updated Nov 3, 2026. Sections and rows marked **planned** are designed but not built; everything else describes the code as it is. What is built is also listed in [features.md](features.md).
 
 ## Overview
 
-Parsewright turns raw sample logs into a tested, CIM-compliant Splunk add-on (TA), deployed to Splunk Enterprise and packaged as a `.tgz`, with an AI agent doing the parsing work and Splunk itself verifying the result.
+Parsemaxxing turns raw sample logs into a tested, CIM-compliant Splunk add-on (TA), deployed to Splunk Enterprise and packaged as a `.tgz`, with an AI agent doing the parsing work and Splunk itself verifying the result.
 
 **Problem.** Every new data source in a SOC needs a parser: line breaking, timestamps, field extractions and CIM mapping. Writing and testing `props.conf` and `transforms.conf` by hand takes hours per source, and mistakes at index time corrupt data permanently.
 
@@ -28,11 +28,11 @@ The hackathon build targets one standalone Splunk Enterprise instance, four log 
 | Splunk Enterprise standalone (all-in-one) | Splunk Cloud, clusters, deployer, forwarders |
 | Formats: JSON, key=value, syslog, CSV | XML, binary, exotic vendor formats |
 | CIM: Authentication, Network_Traffic, Web | Other data models |
-| TA in `/opt/splunk/etc/apps/TA-parsewright-<vendor>-<product>` | Production rollout across a fleet |
+| TA in `/opt/splunk/etc/apps/TA-parsemaxxing-<vendor>-<product>` | Production rollout across a fleet |
 | Any log as uploaded: synthetic generator samples (checked against their truth manifest) and logs without one (checked mechanically, meaning approved by a human) | Committing real or customer logs to this public repo (only synthetic fixtures live here) |
 | Logs supplied by upload (a drop folder is planned) | Automatic discovery of unparsed data inside Splunk (dropped: damaged samples, production data exposure) |
 | Dedicated inputs; shared syslog feeds (routing by index-time sourcetype rename) planned | Writing inputs.conf (left to the input owner) |
-| Parser updates for TAs built by Parsewright (drift monitoring planned) | Updating TAs not built by Parsewright (needs an overlay TA and app precedence handling) |
+| Parser updates for TAs built by Parsemaxxing (drift monitoring planned) | Updating TAs not built by Parsemaxxing (needs an overlay TA and app precedence handling) |
 
 **Principles**
 
@@ -64,7 +64,7 @@ flowchart TB
         ORCH --> agents
         ORCH --> actions
     end
-    SPLUNK["<b>Splunk Enterprise</b> (standalone)<br/>TA-parsewright-* apps · pw_* test index<br/>REST :8089, scoped tokens"]
+    SPLUNK["<b>Splunk Enterprise</b> (standalone)<br/>TA-parsemaxxing-* apps · pmx_* test index<br/>REST :8089, scoped tokens"]
     LLM["Meta Model API<br/>or self-hosted Muse Spark Open"]
     UI <-->|"HTTP + server-sent events"| ORCH
     agents -->|"model calls"| LLM
@@ -99,7 +99,7 @@ flowchart TB
         direction LR
         AGENT["<b>Stage agent</b> (Muse Spark)<br/>Index-time, then Extraction,<br/>then CIM mapper:<br/>proposes config"]
         GATE["<b>Guardrail gate</b><br/>code: allowlisted keys,<br/>regex and scope checks"]
-        DEPLOY["<b>Deploy + ingest</b><br/>code: test copy of the<br/>add-on, pw_test index"]
+        DEPLOY["<b>Deploy + ingest</b><br/>code: test copy of the<br/>add-on, pmx_test index"]
         VAL["<b>Validator</b><br/>Splunk: fixed SPL<br/>checks, no AI"]
         AGENT --> GATE
         GATE -- "allowed" --> DEPLOY --> VAL
@@ -108,7 +108,7 @@ flowchart TB
     end
 
     VAL -- "all three stages pass" --> APPROVE{{"Human: approve the exact package (SHA-256)"}}
-    APPROVE --> TA[/"TA-parsewright-#lt;vendor#gt;-#lt;product#gt;.tgz"/]
+    APPROVE --> TA[/"TA-parsemaxxing-#lt;vendor#gt;-#lt;product#gt;.tgz"/]
 ```
 
 **LogProfile contents:** format, multiline flag, timestamp example and format candidates, timezone hints, vendor/product guess, sourcetype name, field inventory with coverage, event categories, target CIM models. Every later stage builds on it, and its field inventory defines what CIM fields are achievable.
@@ -170,14 +170,14 @@ A run goes from upload to an approved `.tgz` in eight steps; steps 4 to 6 each r
 5. **Extraction stage.** Search-time fields.
 6. **CIM stage.** Aliases, evals, lookups, eventtypes, tags.
 7. **Approval.** The user reviews raw vs parsed events side by side (each extracted value highlighted in the raw line, `_time` next to the raw timestamp) and a raw value → field → CIM field → normalized value table, plus the scores and final configs. They approve or reject; a rejected run promotes nothing. Correcting a mapping from the report, sent back to the owning stage as evidence, is planned.
-8. **Promote.** Code renames the approved package to its real names, installs it as `TA-parsewright-<vendor>-<product>`, runs a smoke test and registers the version.
+8. **Promote.** Code renames the approved package to its real names, installs it as `TA-parsemaxxing-<vendor>-<product>`, runs a smoke test and registers the version.
 
 ### Inner loop for every stage attempt
 
 1. **Generate:** the stage's agent gets its curated context and returns its config (schema-validated).
 2. **Gate:** guardrails check it: a key allowlist with typed values and bounds, regex safety and scope. After install, any splunkd warning about the test add-on fails the attempt and becomes evidence. splunkd does not warn about unknown or misspelled keys, so the allowlist is the syntax control. No shell, sidecar or Docker socket ([lab-findings.md](lab-findings.md), Q7).
 3. **Deploy:** install the complete `.tgz` under its test identity (see Test identity) through the `apps/local` REST endpoint with `update=true`, from a shared packages folder; never through the `configs/conf-*` endpoints, and no restart ([lab-findings.md](lab-findings.md#q6-deploy-path), Q6).
-4. **Ingest:** post the samples to `receivers/simple` into the one shared test index, `PARSEWRIGHT_TEST_INDEX` (`pw_test`), created once at setup; the engine never creates or deletes indexes. A new sourcetype's index-time settings apply to the very next ingest with no reload. Each attempt has its own sourcetype (see Test identity), and every Validator search filters on it, so attempts and jobs never mix. Then wait until the event count is stable ([lab-findings.md](lab-findings.md), Q3, Q8 and Q9).
+4. **Ingest:** post the samples to `receivers/simple` into the one shared test index, `PARSEMAXXING_TEST_INDEX` (`pmx_test`), created once at setup; the engine never creates or deletes indexes. A new sourcetype's index-time settings apply to the very next ingest with no reload. Each attempt has its own sourcetype (see Test identity), and every Validator search filters on it, so attempts and jobs never mix. Then wait until the event count is stable ([lab-findings.md](lab-findings.md), Q3, Q8 and Q9).
 5. **Validate:** run that stage's fixed SPL checks, plus a quick regression re-run of earlier stages' checks.
 6. **Decide:** pass moves to the next stage; fail returns to the same agent with evidence (expected, actual, up to 3 failing events).
 
@@ -201,9 +201,9 @@ Every test deploy runs under a separate app name and a separate sourcetype name,
 
 | Item | Production name | Test name |
 | --- | --- | --- |
-| App | `TA-parsewright-fortinet-fortigate` | `TA-parsewright-fortinet-fortigate__test_<job>` |
+| App | `TA-parsemaxxing-fortinet-fortigate` | `TA-parsemaxxing-fortinet-fortigate__test_<job>` |
 | Sourcetype (every stanza, eventtype and search in the copy) | `fortinet:fortigate:traffic` | `fortinet:fortigate:traffic__test_<job>_a<attempt>` |
-| Transforms | `parsewright_<job>_…` | Same prefix plus `__test` |
+| Transforms | `parsemaxxing_<job>_…` | Same prefix plus `__test` |
 
 Every attempt is a new sourcetype: the case the lab proved applies without a reload (Q3), and what separates attempts inside the one shared test index.
 
@@ -240,7 +240,7 @@ Planned: how logs reach Splunk (file monitor, syslog, HEC), the current sourcety
 
 **Getting samples out of Splunk** (when the user has no original file): a plain event search with `| head 500 | reverse`, then Export → Raw Events (or `splunk search … -output rawdata`, or the REST export endpoint with `output_mode=raw`). Before using it, check `max(len(_raw))` and `max(linecount)`: events cut at 10,000 characters are truncated and unusable. The original file on the forwarder or syslog collector is always the better sample.
 
-**Going live** (planned). For a dedicated input, the approval report ends with the exact `inputs.conf` change (e.g. `sourcetype = fortinet:fortigate:traffic` on the input now sending `fw01-2`). Parsewright never writes inputs itself.
+**Going live** (planned). For a dedicated input, the approval report ends with the exact `inputs.conf` change (e.g. `sourcetype = fortinet:fortigate:traffic` on the input now sending `fw01-2`). Parsemaxxing never writes inputs itself.
 
 **Only the log is uploaded.** A generator sample is recognised by its content hash and validated against its own truth manifest from the repo (a manifest can also be uploaded, and is checked like any input). Any other log has no answer key and is validated mechanically (see "Validation without a manifest"). The demo uses synthetic logs only; the repo never holds real ones.
 
@@ -252,7 +252,7 @@ Every unparsed log source becomes one job in a PostgreSQL queue, and a pool of l
 
 | Source | How jobs are created |
 | --- | --- |
-| Upload | The web UI, `POST /uploads`, or `parsewright run <file>` |
+| Upload | The web UI, `POST /uploads`, or `parsemaxxing run <file>` |
 | Drop folder | Planned |
 
 ### No two workers on the same logs
@@ -270,12 +270,12 @@ Every unparsed log source becomes one job in a PostgreSQL queue, and a pool of l
 | Worker crashes | Lease (~2 min) expires; another worker resumes from the last saved state |
 | Worker is slow but alive | Heartbeat renews the lease |
 | Service restarts | Workers run with an auto-restart policy; queued jobs persist in PostgreSQL |
-| Production data | Untouched: reload not restart, testing only in `pw_*` indexes |
+| Production data | Untouched: reload not restart, testing only in `pmx_*` indexes |
 
 ### Shared limits
 
 - **Splunk writes** (app install, reload) run under one global lock, one job at a time; LLM calls and validation searches run in parallel.
-- **Worker count** sized to Splunk's concurrent search limit: `parsewright serve --workers 4` by default.
+- **Worker count** sized to Splunk's concurrent search limit: `parsemaxxing serve --workers 4` by default.
 - **LLM** calls limited to 2 at once, plus a per-job token budget, to protect rate limits and the API credits.
 
 ### Credit protection
@@ -297,28 +297,28 @@ In the lab, four uploads at once ran on four workers in parallel, one pausing fo
 
 > Not built: a future enhancement after the hackathon (Phase 9). The design is kept as the roadmap.
 
-Parsing only works once events carry the right sourcetype, so Parsewright also handles how events get it, including shared feeds where many vendors arrive under one generic sourcetype such as `syslog`.
+Parsing only works once events carry the right sourcetype, so Parsemaxxing also handles how events get it, including shared feeds where many vendors arrive under one generic sourcetype such as `syslog`.
 
 Every event in Splunk already has a sourcetype, often a meaningless one: set generically in `inputs.conf` (`syslog`), matched by a pretrained type, or invented from the file name (`fw01-2`, `fw01-too_small`).
 
 ### Two cases
 
-| Case | Example | What Parsewright does |
+| Case | Example | What Parsemaxxing does |
 | --- | --- | --- |
 | Dedicated input | A forwarder monitoring `/var/log/remote/fw01/` only | No agent work: the approval report ends with the exact `inputs.conf` change to copy, e.g. `sourcetype = fortinet:fortigate:traffic` |
 | Shared feed | UDP/TCP 514 with `sourcetype = syslog` carrying FortiGate, Cisco, Palo Alto and Linux | Runs the Routing stage to split the target vendor out by index-time rename |
 
-Parsewright never writes `inputs.conf` itself; changing inputs stays with the person who owns them.
+Parsemaxxing never writes `inputs.conf` itself; changing inputs stays with the person who owns them.
 
 ### Routing config the agent produces
 
 ```ini
 # props.conf
 [syslog]
-TRANSFORMS-parsewright_route_fgt = parsewright_route_fortigate
+TRANSFORMS-parsemaxxing_route_fgt = parsemaxxing_route_fortigate
 
 # transforms.conf
-[parsewright_route_fortigate]
+[parsemaxxing_route_fortigate]
 REGEX = devid="?FG[0-9A-Z]+
 DEST_KEY = MetaData:Sourcetype
 FORMAT = sourcetype::fortinet:fortigate
@@ -357,7 +357,7 @@ The key allowlist normally blocks touching generic stanzas. One narrow exception
 
 When a log format changes, an update job patches the existing TA with the smallest change that works, and must prove that both the old and the new format still parse, because after a firmware upgrade both usually coexist for a while.
 
-**TA registry.** Every TA that Parsewright builds is stored with its versions, original samples, truth manifest and baseline. The old samples become the regression set, so they are kept for as long as the TA exists.
+**TA registry.** Every TA that Parsemaxxing builds is stored with its versions, original samples, truth manifest and baseline. The old samples become the regression set, so they are kept for as long as the TA exists.
 
 **Update flow**
 
@@ -367,25 +367,25 @@ When a log format changes, an update job patches the existing TA with the smalle
 4. **Regression.** The patched TA must pass on the old registry samples and the new samples. Breaking the old format rejects the attempt with evidence.
 5. **Review.** Line-by-line diff against the production version, raw vs parsed for an old and a new event, version bump in `app.conf` (e.g. 1.2.0 → 1.3.0), hash-bound approval, rollback to the exact previous version.
 
-**Promotion of an update.** The app is updated in place via REST: `default/`, `metadata/` and `lookups/` are replaced; `local/` (admin overrides) is kept and never written by Parsewright; the previous version stays in the registry for rollback. Before promotion, Parsewright checks the installed TA's `local/` files: if any override a setting the patch changed (e.g. an old `TIME_FORMAT` in `local/props.conf`), the review flags that the fix will not take effect until a human updates or removes the override. Search-time changes apply to past events immediately; index-time changes apply only to data indexed after the reload.
+**Promotion of an update.** The app is updated in place via REST: `default/`, `metadata/` and `lookups/` are replaced; `local/` (admin overrides) is kept and never written by Parsemaxxing; the previous version stays in the registry for rollback. Before promotion, Parsemaxxing checks the installed TA's `local/` files: if any override a setting the patch changed (e.g. an old `TIME_FORMAT` in `local/props.conf`), the review flags that the fix will not take effect until a human updates or removes the override. Search-time changes apply to past events immediately; index-time changes apply only to data indexed after the reload.
 
 **Job type:** update, with states Diagnose → failing stages only → Regression → Approval → Promote.
 
-**As built.** The update job installs the production TA from its kept, hash-checked package under the job's test identity, and ingests the new samples and every registered version's samples under one test sourcetype per attempt, told apart by `source`; every check runs on every set. A later stage that passes as it is is not patched. A patch may add eventtypes but never drop or rename a production one. Updates are a minor version above the highest registered version (so an update after a rollback never reuses a number). Promotion uses `update=true` only over a TA the registry lists at the expected version whose installed `app.conf` carries the Parsewright marker; the lab confirmed `update=true` keeps `local/` ([lab-findings.md](lab-findings.md), Q11). Overrides are flagged by comparing the effective settings with the TA's own `default/`, and with Splunk's documented defaults for keys the TA does not set. After the in-place install the effective settings are read back, and a changed key that is not in effect fails the smoke test. Registered samples are read only from the engine's private runs folder, never through a link, and only while their intake hashes still match. Promotions and rollbacks of one TA run under one lock. Rollback is CLI only: `parsewright rollback <TA> <version>`.
+**As built.** The update job installs the production TA from its kept, hash-checked package under the job's test identity, and ingests the new samples and every registered version's samples under one test sourcetype per attempt, told apart by `source`; every check runs on every set. A later stage that passes as it is is not patched. A patch may add eventtypes but never drop or rename a production one. Updates are a minor version above the highest registered version (so an update after a rollback never reuses a number). Promotion uses `update=true` only over a TA the registry lists at the expected version whose installed `app.conf` carries the Parsemaxxing marker; the lab confirmed `update=true` keeps `local/` ([lab-findings.md](lab-findings.md), Q11). Overrides are flagged by comparing the effective settings with the TA's own `default/`, and with Splunk's documented defaults for keys the TA does not set. After the in-place install the effective settings are read back, and a changed key that is not in effect fails the smoke test. Registered samples are read only from the engine's private runs folder, never through a link, and only while their intake hashes still match. Promotions and rollbacks of one TA run under one lock. Rollback is CLI only: `parsemaxxing rollback <TA> <version>`.
 
-**Out of scope:** updating TAs not built by Parsewright. Editing a Splunkbase vendor TA directly is lost on the vendor's next upgrade; the right approach, a separate overlay TA, depends on Splunk app precedence and is left for later.
+**Out of scope:** updating TAs not built by Parsemaxxing. Editing a Splunkbase vendor TA directly is lost on the vendor's next upgrade; the right approach, a separate overlay TA, depends on Splunk app precedence and is left for later.
 
 ## Drift pipeline (future enhancement)
 
 > Not built: a future enhancement after the hackathon (Phase 8). Parser updates, which it would trigger, are built; today a person starts them with a new sample.
 
-Parsewright watches the parsers it built: Splunk alerts detect a format change for free, code collects masked samples, a Drift Analyst agent decides whether the change is real, and an update job is created automatically, so the only manual step is approving the fix.
+Parsemaxxing watches the parsers it built: Splunk alerts detect a format change for free, code collects masked samples, a Drift Analyst agent decides whether the change is real, and an update job is created automatically, so the only manual step is approving the fix.
 
 Example used below: a FortiGate firmware upgrade changes the log format at 14:00.
 
 ### Steps
 
-0. **Setup at promotion.** The registry stores a baseline (field coverage, CIM values seen, eventtype match rate, volume). Alert searches are installed in a separate Parsewright monitoring app from fixed templates with only the sourcetype and baseline numbers filled in; no agent writes them. Splunk's scheduler runs them (e.g. every 15 minutes); Parsewright spends nothing until one triggers.
+0. **Setup at promotion.** The registry stores a baseline (field coverage, CIM values seen, eventtype match rate, volume). Alert searches are installed in a separate Parsemaxxing monitoring app from fixed templates with only the sourcetype and baseline numbers filled in; no agent writes them. Splunk's scheduler runs them (e.g. every 15 minutes); Parsemaxxing spends nothing until one triggers.
 1. **Alert fires (14:15).** Splunk's webhook alert action posts TA ID, signal, sourcetype, count and window to FastAPI. The endpoint uses a secret token in the URL and accepts only the Splunk server's address, since the webhook cannot send auth headers.
 2. **Dedup and grouping (code).** Signals for a TA with an open drift job attach to it; signals within minutes become one job; a TA closed as noise in the last hour is in cooldown.
 3. **Collection (code, no AI).** With a read-only account limited to registered sourcetypes: change point (`timechart span=5m` of failing vs normal), affected hosts (e.g. 7 of 20, a partial rollout), failing samples grouped by shape, normal events from the same window, truncation check. Values are masked with consistent, format-preserving fakes, so regexes built from them still hold; the masking map also gives partial ground truth.
@@ -428,7 +428,7 @@ Same PostgreSQL queue, locking, persistence, budgets and kill switch as build jo
 
 ### Production access, deliberately narrow
 
-Unlike the dropped discovery idea, drift monitoring only reads sourcetypes Parsewright built, and samples are usually intact because a timestamp or field change leaves `_raw` untouched. Masking (or on-prem Muse Spark Open) applies before any model call.
+Unlike the dropped discovery idea, drift monitoring only reads sourcetypes Parsemaxxing built, and samples are usually intact because a timestamp or field change leaves `_raw` untouched. Masking (or on-prem Muse Spark Open) applies before any model call.
 
 **Credits:** detection, dedup and collection use none; the Analyst runs once per drift job; the update job runs only affected stages.
 
@@ -496,9 +496,9 @@ Parser updates without a manifest: Diagnose snapshots what production gives each
 | Allowed values | e.g. `Authentication.action` not in success, failure, unknown | Zero events |
 | Child datasets | Failures land in e.g. `Failed_Authentication` | Counts match manifest categories |
 
-**CIM scoring rule (no Vladiator-style false failures):** a field counts as missing only if CIM expects it *and* the source contains it. The report shows three numbers: required fields passed, available fields mapped, and fields not in the source (informational, no penalty). Required fields and allowed values are pinned in `cim_spec/`, never chosen by the model: read from the CIM add-on's own data model definitions (Splunk_SA_CIM 8.7.0; each field's `recommended` flag and `expected_values`) by `python -m parsewright.cim_spec.pin`. Required = the root dataset's recommended fields. Data model rows are read with `| datamodel <Model> <Dataset> search | search sourcetype=<attempt>`: the model's output has no `index` field, so the attempt's unique sourcetype is the filter.
+**CIM scoring rule (no Vladiator-style false failures):** a field counts as missing only if CIM expects it *and* the source contains it. The report shows three numbers: required fields passed, available fields mapped, and fields not in the source (informational, no penalty). Required fields and allowed values are pinned in `cim_spec/`, never chosen by the model: read from the CIM add-on's own data model definitions (Splunk_SA_CIM 8.7.0; each field's `recommended` flag and `expected_values`) by `python -m parsemaxxing.cim_spec.pin`. Required = the root dataset's recommended fields. Data model rows are read with `| datamodel <Model> <Dataset> search | search sourcetype=<attempt>`: the model's output has no `index` field, so the attempt's unique sourcetype is the filter.
 
-**Splunk prerequisite:** the CIM index macros (e.g. `cim_Authentication_indexes`) must include `pw_*`, or CIM checks fail falsely. `make up` sets this; on your own Splunk, set it once.
+**Splunk prerequisite:** the CIM index macros (e.g. `cim_Authentication_indexes`) must include `pmx_*`, or CIM checks fail falsely. `make up` sets this; on your own Splunk, set it once.
 
 **Feedback to the agent** is compact: stage, failed check, expected, actual, up to 3 sample events. Precise evidence such as "+10800 s on 40/40 events" points straight at the fix (a wrong `TZ`).
 
@@ -527,10 +527,10 @@ An AI with write access to Splunk is a risk, so every agent output passes a dete
 | Guardrail | Stops | Status |
 | --- | --- | --- |
 | Reject newlines in values; one escaping conf writer | A value injecting a new stanza such as `[script://…]` | Built |
-| Names match `^[a-z0-9_:-]+$`; code adds the fixed prefix `TA-parsewright-` and the pattern applies only to the vendor and product parts; resolved paths must stay inside the TA folder | Path traversal out of the app | Built |
+| Names match `^[a-z0-9_:-]+$`; code adds the fixed prefix `TA-parsemaxxing-` and the pattern applies only to the vendor and product parts; resolved paths must stay inside the TA folder | Path traversal out of the app | Built |
 | Package file allowlist: `default/`, `metadata/`, `lookups/` (CSV), `README`, `app.conf` | `bin/` scripts, `appserver/static` JavaScript in Splunk Web | Built |
-| Prefix every transform `parsewright_<job>_`; collision check by reading existing transform names over REST (`configs/conf-transforms`) before deploy (lab Q7) | Overriding another app's global transform name | Built |
-| TA named `TA-parsewright-<vendor>-<product>`; refuse if the name exists | Overwriting (and later deleting) a Splunkbase vendor TA | Built |
+| Prefix every transform `parsemaxxing_<job>_`; collision check by reading existing transform names over REST (`configs/conf-transforms`) before deploy (lab Q7) | Overriding another app's global transform name | Built |
+| TA named `TA-parsemaxxing-<vendor>-<product>`; refuse if the name exists | Overwriting (and later deleting) a Splunkbase vendor TA | Built |
 
 ### Validator integrity (no gaming)
 
@@ -559,9 +559,9 @@ An AI with write access to Splunk is a risk, so every agent output passes a dete
 | --- | --- | --- |
 | Per-job and daily byte caps on test ingestion | Test data consuming the Splunk license | Built |
 | One shared test index, created at setup; the engine never creates or deletes indexes, and removes each job's test add-on after the run | Disk exhaustion; deleting resources that existed before | Built |
-| Code rejects any ingest target not starting with `pw_` | Test data landing in a real index | Built |
+| Code rejects any ingest target not starting with `pmx_` | Test data landing in a real index | Built |
 | Code owns the base search (`search index=<test index> sourcetype=<own attempt sourcetype>`); a search may only append a `|` pipeline of allowlisted commands (`stats`, `eval`, `where`, `table`, `fieldsummary`, `head`, …), 50 rows, short timeout; commands that start a new result set (`tstats`, `datamodel`, `inputlookup`, `join`, `append*`, …) are refused and stay with the Validator's fixed SPL (T1.2) | `delete`, `collect`, `dbxquery`, `loadjob`, custom commands, other apps' lookups, reading other jobs' samples | Built |
-| Rollback reinstalls the exact previous registered version (`parsewright rollback <TA> <version>`) | A bad update staying in production | Built (routing-transform cleanup planned, with routing) |
+| Rollback reinstalls the exact previous registered version (`parsemaxxing rollback <TA> <version>`) | A bad update staying in production | Built (routing-transform cleanup planned, with routing) |
 
 ### Workflow integrity
 
@@ -592,9 +592,9 @@ An AI with write access to Splunk is a risk, so every agent output passes a dete
 
 | Account | Used by | Can |
 | --- | --- | --- |
-| `parsewright_search` | Agents' `run_search`, the Validator | Search only `pw_*` and `_internal` |
-| `parsewright_deploy` | Orchestrator code only, never a model | Install and update apps, reload, oneshot into `pw_*` |
-| `parsewright_drift` | Drift collector code only (planned; `make up` already creates the account) | Read-only, role search filter limited to registered sourcetypes |
+| `parsemaxxing_search` | Agents' `run_search`, the Validator | Search only `pmx_*` and `_internal` |
+| `parsemaxxing_deploy` | Orchestrator code only, never a model | Install and update apps, reload, oneshot into `pmx_*` |
+| `parsemaxxing_drift` | Drift collector code only (planned; `make up` already creates the account) | Read-only, role search filter limited to registered sourcetypes |
 
 The deploy role's capabilities for app install were confirmed in the lab ([lab-findings.md](lab-findings.md), Q9), and `make up` creates all three accounts with a fresh 7-day token each.
 
@@ -623,7 +623,7 @@ Plain Python, no agent framework: the flow is fixed and small, and readable code
 
 ### Platform and UI
 
-Decision: a Python engine behind FastAPI, with a Next.js UI. The engine also runs headless (`parsewright run samples.log`).
+Decision: a Python engine behind FastAPI, with a Next.js UI. The engine also runs headless (`parsemaxxing run samples.log`).
 
 The UI only reads job state and the ledger and sends the allowed actions (upload, confirm profile, approve, reject); it holds no logic. FastAPI streams ledger events to the browser as they happen. Every ledger log event carries `stage`, `attempt`, `visit`, `actor` (the agent, the gate, the orchestrator, the Validator or the human), `kind` (proposal, guardrail block, deploy, ingest, check pass or fail, evidence, backtrack, human wait, budget, info) and a structured `detail` (proposed settings, check results), written by `orchestrator/events.py`; the UI reads these fields and never parses the text line, which stays for the CLI.
 
@@ -637,12 +637,12 @@ The UI only reads job state and the ledger and sends the allowed actions (upload
 
 Every actor has one identity in the UI (`web/lib/actors.ts`): AI agents, code, Splunk and the human differ in avatar shape and badge, not only colour. Diffs are row-tinted with an icon and a word per row and never show unified-diff markers; the tested configuration is shown as the .conf file in an editor-style pane. The UI uses one dark glass theme. Runs recorded before the event labels are read from their text lines by a display-only fallback (`web/lib/legacy.ts`). Parser-update Diagnose is shown as Validator and Orchestrator work (no AI); a Drift Analyst identity is ready for the planned drift pipeline.
 
-Planned: send ledger events to a `pw_audit` index with a small Splunk dashboard, so SOC teams can monitor agent activity in Splunk.
+Planned: send ledger events to a `pmx_audit` index with a small Splunk dashboard, so SOC teams can monitor agent activity in Splunk.
 
 ### Repo structure
 
 ```
-engine/parsewright/
+engine/parsemaxxing/
 ├── api/              FastAPI routes, upload checks, server-sent events
 ├── orchestrator/     run loop, parser updates, workers, approval and promotion, report
 ├── agents/           LLM client; profiler, index_time, extraction, cim_mapper (prompt + schema each)

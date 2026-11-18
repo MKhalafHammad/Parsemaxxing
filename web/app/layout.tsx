@@ -5,7 +5,7 @@ import { connection } from "next/server";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Parsewright",
+  title: "Parsemaxxing",
   description: "Raw sample logs in, a tested CIM-compliant Splunk add-on out.",
 };
 
@@ -20,7 +20,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <header className="glass-strong sticky top-0 z-30 border-x-0 border-t-0">
           <nav aria-label="Main" className="mx-auto flex max-w-[90rem] flex-wrap items-center gap-x-6 gap-y-1 px-4 py-3 sm:px-6">
             <Link href="/" className="bg-gradient-to-r from-[#c4b5fd] via-[#7dd3fc] to-[#f0abfc] bg-clip-text text-lg font-bold tracking-tight text-transparent">
-              Parsewright
+              Parsemaxxing
             </Link>
             <Link href="/" className="text-sm text-muted hover:text-fg">
               Runs

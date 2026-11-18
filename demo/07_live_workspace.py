@@ -12,13 +12,13 @@ from pathlib import Path
 
 import httpx
 
-API = os.environ.get("PARSEWRIGHT_API", "http://127.0.0.1:8080")
-UI = os.environ.get("PARSEWRIGHT_UI", "http://localhost:3000")
-FX = Path(__file__).resolve().parents[1] / "engine/parsewright/generator/fixtures"
+API = os.environ.get("PARSEMAXXING_API", "http://127.0.0.1:8080")
+UI = os.environ.get("PARSEMAXXING_UI", "http://localhost:3000")
+FX = Path(__file__).resolve().parents[1] / "engine/parsemaxxing/generator/fixtures"
 
 
 def main() -> int:
-    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsewright": "1"})
+    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsemaxxing": "1"})
     name = "acme_vpn_notz.json"
     files = {
         "file": (name, (FX / name).read_bytes()),

@@ -11,7 +11,7 @@ splunk_keys="SPLUNK_HOST SPLUNK_PORT SPLUNK_SEARCH_TOKEN SPLUNK_DEPLOY_TOKEN"
 case "${1:-}" in
   llm) keys="LLM_API_KEY LLM_BASE_URL LLM_MODEL" ;;
   splunk) keys="$splunk_keys" ;;
-  install | update) keys="$splunk_keys PARSEWRIGHT_PACKAGES_DIR PARSEWRIGHT_TEST_INDEX" ;;
+  install | update) keys="$splunk_keys PARSEMAXXING_PACKAGES_DIR PARSEMAXXING_TEST_INDEX" ;;
   *) echo "usage: scripts/probe.sh llm|splunk|install|update" >&2; exit 2 ;;
 esac
 
@@ -23,4 +23,4 @@ while IFS= read -r line || [ -n "$line" ]; do
   case " $keys " in *" $key "*) export "$key=${line#*=}" ;; esac
 done < .env
 
-exec .venv/bin/python -m "parsewright.tools.probes.probe_$1"
+exec .venv/bin/python -m "parsemaxxing.tools.probes.probe_$1"

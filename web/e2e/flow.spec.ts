@@ -7,7 +7,7 @@ test("keyboard-only: upload, confirm the profile, approve", async ({ page }) => 
   await page.route("**/api/engine/runs", (r) => r.fulfill({ json: [] }));
   await page.route("**/api/engine/tas", (r) => r.fulfill({ json: [] }));
   await page.route("**/api/engine/uploads", (r) => {
-    posts.push({ url: r.request().url(), csrf: r.request().headers()["x-parsewright"] ?? null });
+    posts.push({ url: r.request().url(), csrf: r.request().headers()["x-parsemaxxing"] ?? null });
     return r.fulfill({ status: 201, json: { job: "e2e00001", duplicate: false, events: 300, estimated_tokens: 50000 } });
   });
 
@@ -36,12 +36,12 @@ test("keyboard-only: upload, confirm the profile, approve", async ({ page }) => 
   // Profile review, by keyboard.
   let state = "profile_review";
   await page.route("**/api/engine/runs/e2e00001/profile", (r) => {
-    posts.push({ url: r.request().url(), csrf: r.request().headers()["x-parsewright"] ?? null });
+    posts.push({ url: r.request().url(), csrf: r.request().headers()["x-parsemaxxing"] ?? null });
     state = "awaiting_approval";
     return r.fulfill({ json: { job: "e2e00001", status: "queued" } });
   });
   await page.route("**/api/engine/runs/e2e00001/approve", (r) => {
-    posts.push({ url: r.request().url(), csrf: r.request().headers()["x-parsewright"] ?? null });
+    posts.push({ url: r.request().url(), csrf: r.request().headers()["x-parsemaxxing"] ?? null });
     expect(JSON.parse(r.request().postData() ?? "{}")).toEqual({ sha256: "a".repeat(64) });
     state = "approved";
     return r.fulfill({ json: { job: "e2e00001", result: "approved" } });

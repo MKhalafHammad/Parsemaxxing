@@ -1,7 +1,7 @@
 """Extraction and CIM Validator tests on recorded-shape Splunk rows: no live Splunk."""
 
-from parsewright.agents.profiler import FieldInfo, LogProfile
-from parsewright.validator import cim, extraction
+from parsemaxxing.agents.profiler import FieldInfo, LogProfile
+from parsemaxxing.validator import cim, extraction
 
 
 def manifest_of(events):
@@ -187,7 +187,7 @@ def test_built_in_fields_are_not_extraction_checks():
         ev(100, "network_traffic", {"src": "192.0.2.1", "action": "accept", "host": "fw01"}, {})
     ]
     r = extraction.validate(
-        rows((100, {"src": "192.0.2.1", "action": "accept", "host": "parsewright-sample"})),
+        rows((100, {"src": "192.0.2.1", "action": "accept", "host": "parsemaxxing-sample"})),
         manifest_of(events),
         prof,
         set(),

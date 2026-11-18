@@ -6,10 +6,10 @@ Repeatable scripts for the moments shown in the 3-minute demo video. Each "RECOR
 
 - One script per moment, numbered in demo order: `NN_short_name.sh`, for example `01_fix_loop.sh`.
 - Each script:
-  - uses only synthetic logs: the fixtures in `engine/parsewright/generator/fixtures/`, or fresh ones from the generator;
-  - reads its configuration from `.env` and, for the API scripts, `PARSEWRIGHT_API` and `PARSEWRIGHT_UI` (defaults: the local engine and UI);
+  - uses only synthetic logs: the fixtures in `engine/parsemaxxing/generator/fixtures/`, or fresh ones from the generator;
+  - reads its configuration from `.env` and, for the API scripts, `PARSEMAXXING_API` and `PARSEMAXXING_UI` (defaults: the local engine and UI);
   - never prints tokens or keys.
-- Scripts write only to the `pw_` test index and `__test_<job>` apps, like the rest of Parsewright; the engine removes each run's test add-on when the run ends. Nothing is promoted unless you approve it.
+- Scripts write only to the `pmx_` test index and `__test_<job>` apps, like the rest of Parsemaxxing; the engine removes each run's test add-on when the run ends. Nothing is promoted unless you approve it.
 - The top of each script states what it shows, its prerequisites (lab running, tokens set) and roughly how long it takes.
 
 ## Moments

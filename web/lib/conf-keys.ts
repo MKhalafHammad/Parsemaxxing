@@ -1,4 +1,4 @@
-// A plain label and one-line description for the .conf settings Parsewright writes. Static
+// A plain label and one-line description for the .conf settings Parsemaxxing writes. Static
 // and display-only; an unknown key shows just its name.
 type Info = { label: string; description: string };
 

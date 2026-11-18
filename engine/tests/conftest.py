@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from parsewright.agents.llm import LLMClient
-from parsewright.config import Settings
+from parsemaxxing.agents.llm import LLMClient
+from parsemaxxing.config import Settings
 
-FIXTURES = Path(__file__).parents[1] / "parsewright" / "generator" / "fixtures"
+FIXTURES = Path(__file__).parents[1] / "parsemaxxing" / "generator" / "fixtures"
 
 
 def settings(tmp_path: Path, ceiling: int = 100_000) -> Settings:
@@ -22,7 +22,7 @@ def settings(tmp_path: Path, ceiling: int = 100_000) -> Settings:
         splunk_search_token="search-token",
         splunk_deploy_token="deploy-token",
         packages_dir=tmp_path,
-        test_index="pw_test",
+        test_index="pmx_test",
         run_token_ceiling=ceiling,
     )
 
@@ -134,7 +134,7 @@ class FakeSplunk:
 def collect_events():
     """An output that keeps (line, metadata) pairs, the metadata normalized as the worker
     stores it in the ledger."""
-    from parsewright.orchestrator import events
+    from parsemaxxing.orchestrator import events
 
     got: list[tuple[str, dict]] = []
     out = events.Structured(lambda line, meta=None: got.append((line, events.normalize(meta))))
@@ -159,16 +159,16 @@ def _test_dsn() -> str | None:
     import os
     from urllib.parse import urlsplit, urlunsplit
 
-    from parsewright.config import REPO, database_url, load_env_file
+    from parsemaxxing.config import REPO, database_url, load_env_file
 
-    if dsn := os.environ.get("PARSEWRIGHT_TEST_DSN"):
+    if dsn := os.environ.get("PARSEMAXXING_TEST_DSN"):
         return dsn
     load_env_file(REPO / ".env")
     try:
         url = urlsplit(database_url(admin=True))  # tests migrate and reset tables
     except RuntimeError:
         return None
-    return urlunsplit(url._replace(path="/parsewright_test"))
+    return urlunsplit(url._replace(path="/parsemaxxing_test"))
 
 
 @pytest.fixture(scope="session")
@@ -177,7 +177,7 @@ def pg_dsn():
 
     import psycopg
 
-    from parsewright.ledger import store as db
+    from parsemaxxing.ledger import store as db
 
     dsn = _test_dsn()
     if not dsn:
@@ -186,9 +186,9 @@ def pg_dsn():
     try:
         with psycopg.connect(admin, autocommit=True, connect_timeout=3) as conn:
             if not conn.execute(
-                "SELECT 1 FROM pg_database WHERE datname = 'parsewright_test'"
+                "SELECT 1 FROM pg_database WHERE datname = 'parsemaxxing_test'"
             ).fetchone():
-                conn.execute("CREATE DATABASE parsewright_test")
+                conn.execute("CREATE DATABASE parsemaxxing_test")
     except psycopg.OperationalError:
         pytest.skip("PostgreSQL not reachable")
     with db.connect(dsn) as conn:
@@ -201,7 +201,7 @@ def pg(pg_dsn):
     """A Store on the test database, emptied of jobs first (the ledger and the registry history
     are append-only, so their rows are removed by disabling the triggers only inside this
     test helper)."""
-    from parsewright.ledger import store as db
+    from parsemaxxing.ledger import store as db
 
     conn = db.connect(pg_dsn)
     append_only = ("ledger", "ta_versions", "ta_events")

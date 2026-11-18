@@ -12,7 +12,7 @@ You can expect an acknowledgement within 5 working days and an update on the fix
 
 ## Supported versions
 
-Parsewright is pre-1.0 and built during a hackathon. Only the latest commit on the `main` branch is supported; fixes are not backported.
+Parsemaxxing is pre-1.0 and built during a hackathon. Only the latest commit on the `main` branch is supported; fixes are not backported.
 
 | Version | Supported |
 | --- | --- |

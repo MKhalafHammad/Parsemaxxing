@@ -6,8 +6,8 @@ import uuid
 import psycopg
 import pytest
 
-from parsewright.ledger import store as db
-from parsewright.orchestrator import promote
+from parsemaxxing.ledger import store as db
+from parsemaxxing.orchestrator import promote
 
 
 def job_id() -> str:
@@ -127,12 +127,12 @@ def test_advisory_lock_serialises_splunk_writes(pg, pg_dsn):
 
 
 def test_the_app_role_cannot_rewrite_or_unprotect_the_ledger(pg, pg_dsn):
-    # appsec Phase 5 M5: the engine connects as parsewright_app, not the owner. Roles are shared
+    # appsec Phase 5 M5: the engine connects as parsemaxxing_app, not the owner. Roles are shared
     # by the whole PostgreSQL server, so this test never changes the role's password (that
     # would lock the real engine out): it switches to the role with SET ROLE instead.
     app = db.Store(db.connect(pg_dsn))
-    app.conn.execute("SET ROLE parsewright_app")
-    assert app.conn.execute("SELECT current_user AS u").fetchone()["u"] == "parsewright_app"
+    app.conn.execute("SET ROLE parsemaxxing_app")
+    assert app.conn.execute("SELECT current_user AS u").fetchone()["u"] == "parsemaxxing_app"
     (j,) = enqueue(app)  # what the engine needs works
     assert app.claim("w1")["id"] == j
     assert app.transition(j, "running", "stage_failed", worker="w1")
