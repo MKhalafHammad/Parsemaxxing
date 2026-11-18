@@ -31,3 +31,39 @@ def test_new_names_and_comments_load(tmp_path, monkeypatch):
     import os
 
     assert os.environ["PARSEMAXXING_TEST_INDEX"] == "pmx_t"
+
+
+@pytest.mark.parametrize(
+    "env, expected",
+    [
+        ({}, ["http://localhost:3000"]),
+        ({"WEB_ORIGIN": "https://pmx.example.com"}, ["https://pmx.example.com"]),
+        (
+            {"WEB_ORIGINS": "http://localhost:3000, https://pmx.example.com:8443/,"},
+            ["http://localhost:3000", "https://pmx.example.com:8443"],
+        ),
+        (
+            {"WEB_ORIGINS": "https://a.example.com", "WEB_ORIGIN": "https://b.example.com"},
+            ["https://a.example.com"],
+        ),
+    ],
+)
+def test_web_origins(monkeypatch, env, expected):
+    from parsemaxxing import config
+
+    for name in ("WEB_ORIGINS", "WEB_ORIGIN"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert config.web_origins() == expected
+
+
+@pytest.mark.parametrize(
+    "bad", ["*", "https://*.example.com", "ftp://x.example.com", "https://x.example.com/app", "x"]
+)
+def test_web_origins_refuses_wildcards_and_paths(monkeypatch, bad):
+    from parsemaxxing import config
+
+    monkeypatch.setenv("WEB_ORIGINS", bad)
+    with pytest.raises(RuntimeError, match="WEB_ORIGINS"):
+        config.web_origins()

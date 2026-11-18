@@ -74,7 +74,7 @@ def user_agent(request: Request) -> str:
     return request.headers.get("user-agent", "")[:200]
 
 
-def authenticate(request: Request, auth: Auth) -> Principal:
+def authenticate(request: Request, auth: Auth, touch: bool = True) -> Principal:
     header = request.headers.get("authorization")
     if header is not None:
         ip = client_ip(request)
@@ -89,7 +89,7 @@ def authenticate(request: Request, auth: Auth) -> Principal:
             raise AuthError(401, "This API token is not valid, expired or revoked.")
         return principal
     raw = request.cookies.get(SESSION_COOKIE)
-    principal = auth.session(raw) if raw else None
+    principal = auth.session(raw, touch) if raw else None
     if principal is None:
         raise AuthError(401, "Your session ended. Sign in again." if raw else "Sign in first.")
     return principal

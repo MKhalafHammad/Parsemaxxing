@@ -51,6 +51,7 @@ import psycopg
 from parsemaxxing import config
 from parsemaxxing.agents.llm import LLMClient, TokenCeilingExceeded
 from parsemaxxing.api import intake
+from parsemaxxing.api.client import _printable
 from parsemaxxing.config import REPO, Settings, database_url, load_env_file
 from parsemaxxing.guardrails.index_time import GuardrailBlock
 from parsemaxxing.ledger import store as db
@@ -370,7 +371,7 @@ def setup_token() -> int:
 
     path = promote.runs_root(config.runs_dir()) / "setup-token"
     with db.connect(database_url()) as conn:
-        token = issue_setup_token(conn, path, actor="cli:setup-token")
+        token = issue_setup_token(conn, path, actor="cli:setup-token", force=True)
     if token is None:
         print("refused: setup is complete (an admin exists); use `admin reset`", file=sys.stderr)
         return 4
@@ -482,9 +483,10 @@ def api_run(api, args) -> int:
     print(f"job {job} queued (~{out['estimated_tokens']} tokens estimated)")
     row = _wait(api, job)
     record = row.get("record") or {}
-    print(f"{job}: {row['status']} {record.get('result', '')}".rstrip())
+    print(_printable(f"{job}: {row['status']} {record.get('result', '')}").rstrip())
     if row["status"] == "awaiting_approval":
-        print(f"approve: parsemaxxing approve {job} --sha256 {record.get('sha256_test')}")
+        sha = _printable(str(record.get("sha256_test")))
+        print(f"approve: parsemaxxing approve {job} --sha256 {sha}")
     elif row["status"] == "profile_review":
         print("the run needs a profile review (for example its timezone) in the UI")
     return 0 if row["status"] in ("awaiting_approval", "done") else 1
@@ -492,13 +494,15 @@ def api_run(api, args) -> int:
 
 def api_approve(api, args) -> int:
     job = require_job(args.job)
-    print(api.call("POST", f"/runs/{job}/approve", {"sha256": args.sha256})["result"])
+    print(
+        _printable(str(api.call("POST", f"/runs/{job}/approve", {"sha256": args.sha256})["result"]))
+    )
     return 0
 
 
 def api_reject(api, args) -> int:
     job = require_job(args.job)
-    print(f"{job}: {api.call('POST', f'/runs/{job}/reject', {})['status']}")
+    print(_printable(f"{job}: {api.call('POST', f'/runs/{job}/reject', {})['status']}"))
     return 0
 
 
@@ -508,13 +512,14 @@ def api_promote(api, args) -> int:
     if api.call("GET", f"/runs/{job}")["status"] not in ("approved", "promoting", "done"):
         raise ValueError("run is not approved")
     row = _wait(api, job)
-    print(f"{job}: {row['status']} {(row.get('record') or {}).get('smoke', '')}".rstrip())
+    smoke = (row.get("record") or {}).get("smoke", "")
+    print(_printable(f"{job}: {row['status']} {smoke}").rstrip())
     return 0 if row["status"] == promote.DONE else 1
 
 
 def api_rollback(api, args) -> int:
     path = f"/tas/{quote(args.app, safe='')}/rollback"
-    print(api.call("POST", path, {"version": args.version}, timeout=600)["result"])
+    print(_printable(str(api.call("POST", path, {"version": args.version}, timeout=600)["result"])))
     return 0
 
 

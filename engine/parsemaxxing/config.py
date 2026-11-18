@@ -121,8 +121,21 @@ def log_level() -> str:
     return level
 
 
-def web_origin() -> str:
-    return os.environ.get("WEB_ORIGIN", "http://localhost:3000")
+def web_origins() -> list[str]:
+    """The browser origins the web UI is served from (CORS and the CSRF Origin check):
+    WEB_ORIGINS, a comma list, else the single WEB_ORIGIN. Each is scheme://host[:port]."""
+    raw = os.environ.get("WEB_ORIGINS") or os.environ.get("WEB_ORIGIN") or "http://localhost:3000"
+    origins = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+    for o in origins:
+        parts = urlsplit(o)
+        if (
+            parts.scheme not in ("http", "https")
+            or not parts.hostname
+            or "*" in o
+            or o != f"{parts.scheme}://{parts.netloc}"
+        ):
+            raise RuntimeError("WEB_ORIGINS: each origin is http(s)://host[:port], nothing more")
+    return origins
 
 
 def allowed_hosts() -> list[str]:

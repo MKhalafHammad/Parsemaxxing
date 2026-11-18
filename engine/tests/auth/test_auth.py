@@ -3,11 +3,14 @@ backoff, user enumeration (message and timing), session fixation and timeouts, c
 CSRF with a foreign Origin, API tokens (escalation, expiry, revocation), the setup token, MFA
 (required for admins, replay, recovery codes) and a scan for leaked credentials."""
 
+import asyncio
 import dataclasses
+import ipaddress
 import os
 import statistics
 import time
 import uuid
+from functools import partial
 
 import psycopg
 import pyotp
@@ -19,7 +22,14 @@ from parsemaxxing.api import app as api
 from parsemaxxing.auth import PUBLIC, SESSION_COOKIE, check_routes, events, passwords
 from parsemaxxing.auth.model import Role
 from parsemaxxing.auth.policy import route_policies
-from parsemaxxing.auth.service import LOGIN_FAILED, Auth, admin_reset, sha256
+from parsemaxxing.auth.service import (
+    LOGIN_FAILED,
+    Auth,
+    _key,
+    admin_reset,
+    issue_setup_token,
+    sha256,
+)
 from parsemaxxing.secrets import Kek
 from parsemaxxing.settings import AuthSettings
 
@@ -43,9 +53,12 @@ def login(client, username, password=TEST_PASSWORD):
     return client.post("/auth/login", json={"username": username, "password": password})
 
 
-def enrol(client):
-    """Enrol MFA on the client's session; returns (totp, recovery codes)."""
-    secret = client.post("/auth/mfa/enrol").json()["secret"]
+def enrol(client, body=None):
+    """Enrol MFA on the client's session; returns (totp, recovery codes). A full session
+    re-enters the password (the default body); a session in stage "enrol" may send none."""
+    r = client.post("/auth/mfa/enrol", json=body or {"password": TEST_PASSWORD})
+    assert r.status_code == 200, r.text
+    secret = r.json()["secret"]
     totp = pyotp.TOTP(secret)
     r = client.post("/auth/mfa/confirm", json={"code": totp.now()})
     assert r.status_code == 200, r.text
@@ -264,6 +277,7 @@ def test_logout_revokes_and_clears(client, pg):
 def test_password_change_revokes_every_other_session(client, pg, app):
     make_user(pg.conn, "hank", "viewer")
     login(client, "hank")
+    raw = client.post("/auth/tokens", json={"name": "t", "role": "viewer"}).json()["token"]
     with api_client(app) as other:
         login(other, "hank")
         r = client.post(
@@ -272,6 +286,8 @@ def test_password_change_revokes_every_other_session(client, pg, app):
         )
         assert r.status_code == 200, r.text
         assert other.get("/runs").status_code == 401
+    with _bearer(app, raw) as cli:  # API tokens end with the password (M3)
+        assert cli.get("/runs").status_code == 401
     assert client.get("/runs").status_code == 200  # this one got a fresh session
     assert login(client, "hank", NEW_PASSWORD).status_code == 200
 
@@ -293,11 +309,14 @@ def test_role_change_signs_the_user_out_and_keeps_an_admin(client, pg, app):
     other = make_user(pg.conn, "ivy", "viewer")
     with api_client(app) as ivy:
         sign_in_existing(ivy, pg, other)
+        raw = ivy.post("/auth/tokens", json={"name": "t", "role": "viewer"}).json()["token"]
         assert (
             client.post(f"/auth/users/{other['id']}/role", json={"role": "admin"}).json()["role"]
             == "admin"
         )
         assert ivy.get("/runs").status_code == 401
+    with _bearer(app, raw) as cli:  # tokens end with a role change (M3)
+        assert cli.get("/runs").status_code == 401
     # The last active admin cannot be demoted or disabled.
     pg.conn.execute("UPDATE users SET role = 'viewer' WHERE id = %s", (other["id"],))
     assert client.post(f"/auth/users/{me['id']}/role", json={"role": "viewer"}).status_code == 409
@@ -468,7 +487,10 @@ def test_mfa_is_required_for_admins_and_replay_is_refused(client, pg, app):
     make_user(pg.conn, "sam")
     assert login(client, "sam").json()["stage"] == "enrol"
     assert client.get("/runs").status_code == 403  # nothing else until MFA is set up
-    totp, _ = enrol(client)
+    r = client.post("/auth/mfa/enrol")  # stage "enrol": the password was just entered
+    assert r.status_code == 200
+    totp = pyotp.TOTP(r.json()["secret"])
+    assert client.post("/auth/mfa/confirm", json={"code": totp.now()}).status_code == 200
     assert client.get("/runs").status_code == 200
     with api_client(app) as c:
         assert login(c, "sam").json()["stage"] == "mfa"
@@ -522,7 +544,7 @@ def test_mfa_failures_lock(client, pg):
 def test_the_totp_secret_is_in_the_vault_only(client, pg):
     make_user(pg.conn, "wes", "viewer")
     login(client, "wes")
-    secret = client.post("/auth/mfa/enrol").json()["secret"]
+    secret = client.post("/auth/mfa/enrol", json={"password": TEST_PASSWORD}).json()["secret"]
     row = pg.conn.execute("SELECT ciphertext FROM secrets").fetchone()
     assert secret.encode() not in bytes(row["ciphertext"])
     assert secret not in str(pg.conn.execute("SELECT * FROM user_mfa").fetchall())
@@ -543,16 +565,24 @@ def test_auth_events_are_append_only_and_chained(client, pg):
 
 
 def test_admin_reset_is_break_glass(client, pg, app):
-    make_user(pg.conn, "yuri")
+    user = make_user(pg.conn, "yuri")
     login(client, "yuri")
     enrol(client)
+    raw = client.post("/auth/tokens", json={"name": "t", "role": "admin"}).json()["token"]
+    mfa_key = _key("mfa", str(user["id"]))
+    Auth(pg.conn, AuthSettings()).fail(mfa_key, 1)  # a locked MFA step
     for _ in range(6):
         login(client, "yuri", "wrong-password-xyz-1")
     admin_reset(pg.conn, "yuri", NEW_PASSWORD)
+    with _bearer(app, raw) as cli:  # API tokens revoked with the sessions (M3)
+        assert cli.get("/runs").status_code == 401
+    left = pg.conn.execute("SELECT count(*) AS n FROM auth_throttle WHERE key = %s", (mfa_key,))
+    assert left.fetchone()["n"] == 0
     with api_client(app) as c:
         assert login(c, "yuri", NEW_PASSWORD).json()["stage"] == "enrol"  # MFA cleared
     assert client.get("/runs").status_code == 401  # earlier sessions revoked
-    assert events.recent(pg.conn, event="admin_reset")[0]["actor"] == "cli:admin-reset"
+    reset = events.recent(pg.conn, event="admin_reset")[0]
+    assert reset["actor"] == "cli:admin-reset" and reset["detail"]["tokens_revoked"] == 1
 
 
 def test_no_credential_reaches_a_response_log_or_audit_row(client, pg, app, caplog):
@@ -625,3 +655,248 @@ def test_the_app_role_cannot_rewrite_credentials_or_the_audit(pg):
                 conn.execute(sql)
     finally:
         conn.execute("RESET ROLE")
+
+
+# --- appsec Phase 13 findings ----------------------------------------------------------------
+
+ORIGINS = (
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://pmx.example.com",
+    "https://pmx.example.com:8443",
+)
+
+
+def test_every_listed_web_origin_works_and_a_foreign_one_is_refused(
+    pg, pg_dsn, tmp_path, monkeypatch
+):
+    """M2: the web is reached through several origins; each signs in and changes state."""
+    monkeypatch.setenv("WEB_ORIGINS", ",".join(ORIGINS))
+    s = dataclasses.replace(settings(tmp_path), runs_dir=tmp_path / "runs")
+    app = api.create_app(s, dsn=pg_dsn, migrate=True, kek=Kek(os.urandom(32)))
+    make_user(pg.conn, "multi", "viewer")
+    for origin in (*ORIGINS, "https://evil.example.com"):
+        with api_client(app) as c:
+            c.headers["Origin"] = origin
+            pre = c.options(
+                "/auth/login",
+                headers={"Access-Control-Request-Method": "POST", "Origin": origin},
+            )
+            r = login(c, "multi")
+            if origin.startswith("https://evil"):
+                assert r.status_code == 403 and "access-control-allow-origin" not in pre.headers
+                continue
+            assert pre.headers["access-control-allow-origin"] == origin
+            assert r.status_code == 200, (origin, r.text)
+            made = c.post("/auth/tokens", json={"name": "t", "role": "viewer"})
+            assert made.status_code == 201, (origin, made.text)
+
+
+def test_mfa_enrol_on_a_signed_in_session_needs_the_password(client, pg):
+    """L1: a stolen full session cannot swap in the attacker's authenticator."""
+    make_user(pg.conn, "enrol1", "viewer")
+    assert login(client, "enrol1").json()["stage"] == "full"
+    assert client.post("/auth/mfa/enrol").status_code == 422
+    assert client.post("/auth/mfa/enrol", json={}).status_code == 422
+    wrong = client.post("/auth/mfa/enrol", json={"password": "wrong-password-xyz-1"})
+    assert wrong.status_code == 403
+    assert client.post("/auth/mfa/enrol", json={"password": "x", "extra": 1}).status_code == 422
+    assert pg.conn.execute("SELECT count(*) AS n FROM user_mfa").fetchone()["n"] == 0
+    enrol(client)  # with the right password
+    assert pg.conn.execute("SELECT count(*) AS n FROM user_mfa").fetchone()["n"] == 1
+
+
+def test_me_says_whether_mfa_is_required(client, pg, app):
+    from parsemaxxing.settings import PLATFORM, SettingsService
+
+    sign_in(client, pg.conn, "boss1")
+    assert client.get("/auth/me").json()["mfa_required"] is True
+    with api_client(app) as v:
+        sign_in(v, pg.conn, "watch1", "viewer")
+        assert v.get("/auth/me").json()["mfa_required"] is False
+    SettingsService(pg.conn, {}).set(AuthSettings, PLATFORM, {"require_mfa_admins": False}, "t")
+    assert client.get("/auth/me").json()["mfa_required"] is False
+
+
+def test_disable_revokes_the_users_tokens(client, pg, app):
+    sign_in(client, pg.conn, "root2")
+    with api_client(app) as v:
+        user = sign_in(v, pg.conn, "leaver", "viewer")
+        v.post("/auth/tokens", json={"name": "t", "role": "viewer"})
+    assert client.post(f"/auth/users/{user['id']}/disable").status_code == 200
+    client.post(f"/auth/users/{user['id']}/enable")
+    revoked = pg.conn.execute("SELECT revoked_at FROM api_tokens WHERE user_id = %s", (user["id"],))
+    assert revoked.fetchone()["revoked_at"] is not None  # re-enabling does not bring it back
+
+
+def _stream_request(app, cookie: str = "", bearer: str = ""):
+    from starlette.requests import Request
+
+    headers = [(b"host", b"localhost")]
+    if cookie:
+        headers.append((b"cookie", f"{SESSION_COOKIE}={cookie}".encode()))
+    if bearer:
+        headers.append((b"authorization", f"Bearer {bearer}".encode()))
+
+    async def receive():  # an open connection: never a disconnect
+        await asyncio.sleep(3600)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/runs/x/stream",
+        "headers": headers,
+        "query_string": b"",
+        "client": ("192.0.2.10", 40000),
+        "app": app,
+    }
+    return Request(scope, receive)
+
+
+def _stream_until_closed(pg, pg_dsn, request, cut, seconds: float = 6.0):
+    """Run the event stream; `cut()` runs after the first chunk. True when the stream closed
+    by itself."""
+    pg.enqueue("sse00002", "sse:2", "f" * 64, "/tmp/x", {})
+
+    async def go():
+        gen = api._sse(pg_dsn, "sse00002", 0, request, partial(api._still_viewer, request))
+        first = True
+        async for _ in gen:
+            if first:
+                await asyncio.get_running_loop().run_in_executor(None, cut)
+                first = False
+        return True
+
+    try:
+        return asyncio.run(asyncio.wait_for(go(), timeout=seconds))
+    except TimeoutError:
+        return False
+
+
+@pytest.mark.parametrize("credential", ["session", "token"])
+def test_an_open_event_stream_closes_once_its_credential_is_revoked(
+    pg, pg_dsn, app, monkeypatch, credential
+):
+    """L2: a stream opened before a revocation does not keep delivering events."""
+    monkeypatch.setattr(api, "RECHECK_S", 0)
+    auth = Auth(pg.conn, AuthSettings())
+    user = make_user(pg.conn, f"streamer-{credential}", "viewer")
+    if credential == "session":
+        raw = auth.new_session(user["id"], "full", "t", "t")
+        request = _stream_request(app, cookie=raw)
+        cut = lambda: auth.revoke_all(user["id"], "test")  # noqa: E731
+    else:
+        who = auth.session(auth.new_session(user["id"], "full", "t", "t"))
+        raw, _ = auth.create_token(who, "t", Role.VIEWER, 7, "t")
+        request = _stream_request(app, bearer=raw)
+        cut = lambda: pg.conn.execute("UPDATE api_tokens SET revoked_at = now()")  # noqa: E731
+    assert _stream_until_closed(pg, pg_dsn, request, cut)
+
+
+def test_an_open_event_stream_stays_while_valid_and_is_not_activity(pg, pg_dsn, app, monkeypatch):
+    monkeypatch.setattr(api, "RECHECK_S", 0)
+    auth = Auth(pg.conn, AuthSettings())
+    user = make_user(pg.conn, "streamer-ok", "viewer")
+    raw = auth.new_session(user["id"], "full", "t", "t")
+    pg.conn.execute("UPDATE sessions SET last_seen_at = now() - interval '5 minutes'")
+    before = pg.conn.execute("SELECT last_seen_at FROM sessions").fetchone()["last_seen_at"]
+    assert not _stream_until_closed(pg, pg_dsn, _stream_request(app, cookie=raw), lambda: None, 3)
+    after = pg.conn.execute("SELECT last_seen_at FROM sessions").fetchone()["last_seen_at"]
+    assert after == before  # the re-check does not hold the idle timeout off
+
+
+def test_engine_workers_share_one_setup_token(pg, pg_dsn, tmp_path):
+    """The engine runs several uvicorn workers; each builds the app and must not replace the
+    token another worker just wrote."""
+    s = dataclasses.replace(settings(tmp_path), runs_dir=tmp_path / "runs")
+    apps = [api.create_app(s, dsn=pg_dsn, migrate=i == 0) for i in range(4)]
+    path = apps[0].state.setup_token_path
+    token = path.read_text().strip()
+    stored = pg.conn.execute("SELECT token_hash FROM setup_token").fetchone()["token_hash"]
+    assert stored == sha256(token)
+    issued = events.recent(pg.conn, event="setup_token_issued")
+    assert len(issued) == 1
+    with api_client(apps[-1]) as c:
+        assert _setup(c, token).status_code == 201
+
+
+def test_concurrent_setup_token_issue_agrees(pg, pg_dsn, tmp_path):
+    import threading
+
+    from parsemaxxing.ledger import store as db
+
+    path = tmp_path / "setup-token"
+    got: list[str | None] = []
+
+    def worker():
+        with db.connect(pg_dsn) as conn:
+            got.append(issue_setup_token(conn, path))
+
+    threads = [threading.Thread(target=worker) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(set(got)) == 1 and got[0] == path.read_text().strip()
+    assert len(events.recent(pg.conn, event="setup_token_issued")) == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "UPDATE setup_token SET expires_at = now() - interval '1 second'",
+        "UPDATE setup_token SET used_at = now()",
+        "missing-file",
+        "UPDATE setup_token SET token_hash = repeat('0', 64)",  # the file is not the token
+    ],
+    ids=["expired", "used", "missing-file", "mismatch"],
+)
+def test_a_stale_setup_token_is_replaced(pg, tmp_path, change):
+    path = tmp_path / "setup-token"
+    first = issue_setup_token(pg.conn, path)
+    if change == "missing-file":
+        path.unlink()
+    else:
+        pg.conn.execute(change)
+    second = issue_setup_token(pg.conn, path)
+    assert second and second != first and path.read_text().strip() == second
+    assert pg.conn.execute("SELECT token_hash FROM setup_token").fetchone()["token_hash"] == sha256(
+        second
+    )
+
+
+def test_force_reissues_the_setup_token(pg, tmp_path):
+    path = tmp_path / "setup-token"
+    first = issue_setup_token(pg.conn, path)
+    assert issue_setup_token(pg.conn, path) == first
+    second = issue_setup_token(pg.conn, path, force=True)
+    assert second != first and path.read_text().strip() == second
+    assert issue_setup_token(pg.conn, path) == second
+
+
+def _ip_request(peer: str, forwarded: str, trusted: list[str]):
+    from types import SimpleNamespace
+
+    nets = [ipaddress.ip_network(n) for n in trusted]
+    return SimpleNamespace(
+        client=SimpleNamespace(host=peer),
+        headers={"x-forwarded-for": forwarded} if forwarded else {},
+        app=SimpleNamespace(state=SimpleNamespace(trusted_proxies=nets)),
+    )
+
+
+@pytest.mark.parametrize(
+    "peer, forwarded, trusted, expected",
+    [
+        ("203.0.113.5", "198.51.100.7", [], "203.0.113.5"),  # no proxy trusted
+        ("203.0.113.5", "198.51.100.7", ["192.0.2.0/24"], "203.0.113.5"),  # untrusted peer
+        ("192.0.2.2", "198.51.100.7", ["192.0.2.0/24"], "198.51.100.7"),  # the web proxy
+        ("192.0.2.2", "203.0.113.9, 198.51.100.7", ["192.0.2.0/24"], "198.51.100.7"),  # last hop
+        ("192.0.2.2", "not-an-ip", ["192.0.2.0/24"], "192.0.2.2"),  # garbage: the peer
+        ("192.0.2.2", "", ["192.0.2.0/24"], "192.0.2.2"),
+    ],
+)
+def test_x_forwarded_for_only_from_a_trusted_proxy(peer, forwarded, trusted, expected):
+    from parsemaxxing.auth.policy import client_ip
+
+    assert client_ip(_ip_request(peer, forwarded, trusted)) == expected

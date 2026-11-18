@@ -24,10 +24,18 @@ A route with no policy and not in `policy.PUBLIC` makes `create_app` raise.
 ## First run and break-glass
 - With no admin, the engine writes a one-time setup token (60 minutes, single use) to
   `<runs dir>/setup-token` (`/app/.runs/setup-token` in the container, mode 0600) and logs only
-  the path. `parsemaxxing setup-token` writes and prints a new one. `POST /setup` creates the
-  first admin, who then enrols MFA.
+  the path. Every engine worker keeps the token already there while it is unexpired, unused and
+  its file is present (under the `ADMIN_LOCK` advisory lock); `parsemaxxing setup-token` always
+  writes and prints a new one. `POST /setup` creates the first admin, who then enrols MFA.
 - `parsemaxxing admin reset <user>` (database owner credentials, on the host): new password
-  read without echo, MFA cleared, account enabled and unlocked, sessions revoked, audited.
+  read without echo, MFA cleared, account enabled and unlocked (login and MFA throttles), every
+  session and API token revoked, audited.
+- API tokens are also revoked on a password change, a role change and disable.
+- `POST /auth/mfa/enrol` takes `{"password": "..."}` (required on a "full" session; a session in
+  stage "enrol" may send no body). `GET /auth/me` returns `mfa_required` (admin and
+  `require_mfa_admins` on).
+- An open `/runs/{job}/stream` re-checks its session or token every 15 s (not counted as
+  activity) and closes once it is revoked, expired or no longer passes the route's role.
 
 ## The CLI goes through the API
 `run`, `update`, `approve`, `reject`, `promote`, `rollback` and `kill` call the engine API, so
@@ -54,7 +62,8 @@ app-role credentials (no owner credentials needed).
 and Firefox treat `http://localhost` as a secure context and keep `Secure` / `__Host-` cookies
 there, so the local stack works over plain http on localhost (Playwright Chromium included);
 Safari does not, and any other host name needs the `https` profile. Every state-changing request
-needs `X-Parsemaxxing: 1`; one that carries the cookie also needs `Origin` equal to `WEB_ORIGIN`.
+needs `X-Parsemaxxing: 1`; one that carries the cookie also needs an `Origin` listed in
+`WEB_ORIGINS` (a comma list; `WEB_ORIGIN` as a single-value fallback), which also sets CORS.
 API tokens go in `Authorization: Bearer pmxt_...` (no Origin needed, no cookie).
 
 ## Settings (`auth` group, platform)

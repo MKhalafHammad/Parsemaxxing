@@ -185,7 +185,7 @@ def test_event_stream_delivers_each_transition_within_two_seconds(pg, pg_dsn):
     last = pg.events("sse00001")[-1]["id"]  # skip the replay: only the live event can arrive
 
     async def first_new_event():
-        gen = api._sse(pg_dsn, "sse00001", after=last, request=Req())
+        gen = api._sse(pg_dsn, "sse00001", after=last, request=Req(), allowed=lambda s: True)
         started = time.monotonic()
         threading.Timer(
             0.3,

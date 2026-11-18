@@ -62,6 +62,10 @@ class PasswordBody(_Body):
     password: Password
 
 
+class EnrolBody(_Body):
+    password: Password | None = None  # required when the session is "full" (re-authentication)
+
+
 class NewPasswordBody(_Body):
     current_password: Password
     new_password: Password
@@ -91,8 +95,10 @@ class RoleBody(_Body):
     role: Role
 
 
-def _me(p: Principal, user: dict) -> dict:
-    return {"user": public_user(user), "stage": p.stage, "via": p.via}
+def _me(p: Principal, user: dict, require_mfa_admins: bool) -> dict:
+    # mfa_required: the UI hides "Turn off MFA"; the engine refuses it anyway (mfa_disable).
+    required = user["role"] == Role.ADMIN and require_mfa_admins
+    return {"user": public_user(user), "stage": p.stage, "via": p.via, "mfa_required": required}
 
 
 def _signed_in(response: Response, auth, raw: str, stage: str, user: dict) -> dict:
@@ -164,7 +170,8 @@ def logout(request: Request, response: Response, store: StoreDep) -> dict:
 
 @router.get("/auth/me")
 def me(p: AnySession, request: Request, store: StoreDep) -> dict:
-    return _me(p, auth_for(request, store).user(p.user_id))
+    auth = auth_for(request, store)
+    return _me(p, auth.user(p.user_id), auth.s.require_mfa_admins)
 
 
 # --- own account -------------------------------------------------------------------------
@@ -181,8 +188,9 @@ def change_password(
 
 
 @router.post("/auth/mfa/enrol")
-def mfa_enrol(p: Account, request: Request, store: StoreDep) -> dict:
-    return auth_for(request, store).mfa_enrol(p, client_ip(request))
+def mfa_enrol(p: Account, request: Request, store: StoreDep, body: EnrolBody | None = None) -> dict:
+    password = body.password if body else None
+    return auth_for(request, store).mfa_enrol(p, client_ip(request), password)
 
 
 @router.post("/auth/mfa/confirm")

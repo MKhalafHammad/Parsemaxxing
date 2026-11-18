@@ -23,7 +23,9 @@ Design: [7.3](../../../docs/design.md), D6. Threats T11.1-T11.12. Baseline A01-1
   unknown user names lock exactly like known ones; throttle keys are hashed (a typed name is
   never stored). Audit rows never hold a password, token, session id, code or unknown name.
 - New session id at every login, MFA completion, password or MFA change; all of a user's
-  sessions revoked on password, MFA, role change, disable and admin reset.
+  sessions revoked on password, MFA, role change, disable and admin reset; all of their API
+  tokens on password, role change, disable and admin reset. MFA enrolment on a full session
+  re-enters the password. An open event stream re-checks its credential every `RECHECK_S`.
 - Tokens: role at most the creator's, effective role at most the owner's current role, expiry
   1-90 days, session-only creation (a token cannot mint tokens or change the account).
 - TOTP: ±1 step, a step at or before `last_step` is refused (replay).

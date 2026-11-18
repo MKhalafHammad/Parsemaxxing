@@ -16,10 +16,11 @@ import asyncio
 import ipaddress
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
-from functools import cache
+from functools import cache, partial
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -53,6 +54,7 @@ TaName = Annotated[
 CSRF_HEADER = "X-Parsemaxxing"
 MAX_BODY = 31 * 1024 * 1024  # 10 MB sample + 20 MB manifest + form overhead
 MAX_STREAMS = 20
+RECHECK_S = 15  # an open event stream re-checks its session or token this often
 STREAMS = asyncio.Semaphore(MAX_STREAMS)
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -119,7 +121,7 @@ def create_app(
     uploads.mkdir(mode=0o700, exist_ok=True)
 
     app = FastAPI(title="Parsemaxxing", docs_url=None, redoc_url=None, openapi_url=None)
-    web_origin = config.web_origin()
+    web_origins = config.web_origins()
     hosts = set(config.allowed_hosts())
     app.state.dsn = dsn
     app.state.environ = config.environ()
@@ -136,7 +138,7 @@ def create_app(
     app.add_middleware(BodyLimit, limit=MAX_BODY, paths=("/uploads",))
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[web_origin],
+        allow_origins=web_origins,
         allow_methods=["GET", "POST"],
         allow_headers=["Content-Type", "Last-Event-ID", CSRF_HEADER],
     )
@@ -181,7 +183,7 @@ def create_app(
             cookie = policy.SESSION_COOKIE in request.cookies
             if (
                 request.headers.get(CSRF_HEADER) != "1"
-                or (origin and origin != web_origin)
+                or (origin and origin not in web_origins)
                 or (cookie and not origin)
             ):
                 return error(403, "cross-site request refused", rid)
@@ -464,7 +466,7 @@ def create_app(
         if STREAMS.locked():
             raise HTTPException(503, "too many open event streams")
         return StreamingResponse(
-            _capped(_sse(dsn, job, after, request)),
+            _capped(_sse(dsn, job, after, request, partial(_still_viewer, request))),
             media_type="text/event-stream",
             headers={"X-Accel-Buffering": "no"},
         )
@@ -541,14 +543,37 @@ class BodyLimit:
         return await self.app(scope, counted, send)
 
 
-async def _sse(dsn: str, job: str, after: int, request: Request) -> AsyncIterator[bytes]:
-    """Replay the job's ledger after `after`, then push each new row as it is inserted."""
+def _still_viewer(request: Request, store: db.Store) -> bool:
+    """The stream's credential is still valid and still passes the route's Viewer policy
+    (not revoked, expired, disabled or demoted below it). Not counted as session activity."""
+    rule = policy.VIEWER.pmx_policy
+    try:
+        p = policy.authenticate(request, policy.auth_for(request, store), touch=False)
+    except AuthError:
+        return False
+    return p.stage in rule.stages and p.role.covers(rule.role)
+
+
+async def _sse(
+    dsn: str,
+    job: str,
+    after: int,
+    request: Request,
+    allowed: Callable[[db.Store], bool],
+) -> AsyncIterator[bytes]:
+    """Replay the job's ledger after `after`, then push each new row as it is inserted.
+    Every RECHECK_S the caller's credential is checked again; the stream ends once it fails."""
     loop = asyncio.get_running_loop()
     conn = await loop.run_in_executor(None, db.connect, dsn)
     try:
         await loop.run_in_executor(None, conn.execute, "LISTEN ledger")
         store = db.Store(conn)
+        checked = time.monotonic()
         while not await request.is_disconnected():
+            if time.monotonic() - checked >= RECHECK_S:
+                if not await loop.run_in_executor(None, allowed, store):
+                    return
+                checked = time.monotonic()
             rows = await loop.run_in_executor(None, store.events, job, after)
             for e in rows:
                 after = e["id"]

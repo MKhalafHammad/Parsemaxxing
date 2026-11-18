@@ -355,3 +355,23 @@ def test_the_app_role_can_issue_the_setup_token(pg, tmp_path):
     finally:
         pg.conn.execute("RESET ROLE")
     assert (tmp_path / "setup-token").stat().st_mode & 0o777 == 0o600
+
+
+def test_cli_success_output_is_printable_only(capsys):
+    """L3: text the engine returns (a run's result, a smoke check, a rollback message) cannot
+    drive the terminal."""
+    from types import SimpleNamespace
+
+    def send(request, timeout):
+        path = request.full_url.removeprefix(URL)
+        if path.endswith("/approve") or path.endswith("/rollback"):
+            return 200, b'{"result": "ok\\u001b[2J\\u0007done"}'
+        return 200, b'{"status": "done", "record": {"smoke": "s\\u001b]0;x\\u0007ok"}}'
+
+    a = Api(URL, WRONG, send)
+    assert cli.api_approve(a, SimpleNamespace(job="cafe0001", sha256=SHA)) == 0
+    assert cli.api_rollback(a, SimpleNamespace(app=APP, version="1.0.0")) == 0
+    assert cli.api_promote(a, SimpleNamespace(job="cafe0001")) == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    assert out.splitlines() == ["ok[2Jdone", "ok[2Jdone", "cafe0001: done s]0;xok"]

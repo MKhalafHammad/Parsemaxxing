@@ -57,24 +57,46 @@ def admin_exists(conn: psycopg.Connection) -> bool:
     return conn.execute("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1").fetchone() is not None
 
 
-def issue_setup_token(conn: psycopg.Connection, path: Path, actor: str = "engine") -> str | None:
-    """While no admin exists: a new one-time setup token (60 minutes, single use) written to
-    `path` (mode 0600), replacing any earlier one. Returns it, or None when setup is done."""
-    if admin_exists(conn):
-        return None
-    raw = secrets.token_urlsafe(32)
-    path.unlink(missing_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(raw + "\n")
-    conn.execute(
-        "INSERT INTO setup_token (one, token_hash, expires_at)"
-        " VALUES (true, %s, now() + make_interval(mins => %s)) ON CONFLICT (one) DO UPDATE"
-        " SET token_hash = EXCLUDED.token_hash, issued_at = now(),"
-        " expires_at = EXCLUDED.expires_at, used_at = NULL",
-        (sha256(raw), SETUP_MINUTES),
-    )
-    events.record(conn, "setup_token_issued", "success", actor)
+def _read_token_file(path: Path) -> str:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return ""
+    with os.fdopen(fd, encoding="utf-8") as f:
+        return f.read(256).strip()
+
+
+def issue_setup_token(
+    conn: psycopg.Connection, path: Path, actor: str = "engine", force: bool = False
+) -> str | None:
+    """While no admin exists: the one-time setup token (60 minutes, single use) in `path`
+    (mode 0600). Idempotent across engine workers: an unexpired, unused token whose file is
+    present is kept; `force` (the CLI) replaces it. Returns the token, or None when setup is
+    done."""
+    with conn.transaction():
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_LOCK,))
+        if admin_exists(conn):
+            return None
+        if not force:
+            row = conn.execute(
+                "SELECT token_hash FROM setup_token WHERE used_at IS NULL AND expires_at > now()"
+            ).fetchone()
+            kept = _read_token_file(path)
+            if row and kept and hmac.compare_digest(row["token_hash"], sha256(kept)):
+                return kept
+        raw = secrets.token_urlsafe(32)
+        path.unlink(missing_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(raw + "\n")
+        conn.execute(
+            "INSERT INTO setup_token (one, token_hash, expires_at)"
+            " VALUES (true, %s, now() + make_interval(mins => %s)) ON CONFLICT (one) DO UPDATE"
+            " SET token_hash = EXCLUDED.token_hash, issued_at = now(),"
+            " expires_at = EXCLUDED.expires_at, used_at = NULL",
+            (sha256(raw), SETUP_MINUTES),
+        )
+        events.record(conn, "setup_token_issued", "success", actor)
     return raw
 
 
@@ -224,7 +246,8 @@ class Auth:
         )
         return raw
 
-    def session(self, raw: str) -> Principal | None:
+    def session(self, raw: str, touch: bool = True) -> Principal | None:
+        """`touch=False`: a re-check (the event stream) that does not count as activity."""
         if not raw or len(raw) > 128:
             return None
         row = self.conn.execute(
@@ -240,7 +263,7 @@ class Auth:
         if row["expired"] or row["idle"]:
             self.revoke_session(row["id"], "expired" if row["expired"] else "idle")
             return None
-        if row["stale"]:
+        if row["stale"] and touch:
             self.conn.execute(
                 "UPDATE sessions SET last_seen_at = now() WHERE id = %s", (row["id"],)
             )
@@ -442,8 +465,16 @@ class Auth:
                 "UPDATE users SET role = %s, updated_at = now() WHERE id = %s", (str(role), user_id)
             )
             self.revoke_all(user_id, "role change")
+            n = revoke_user_tokens(self.conn, user_id)
             self.audit(
-                "role_change", "success", p.username, user_id, ip, old=user["role"], new=str(role)
+                "role_change",
+                "success",
+                p.username,
+                user_id,
+                ip,
+                old=user["role"],
+                new=str(role),
+                tokens_revoked=n,
             )
         return self.user(user_id)
 
@@ -458,10 +489,17 @@ class Auth:
                 " END, updated_at = now() WHERE id = %s",
                 (disabled, user_id),
             )
+            n = 0
             if disabled:
                 self.revoke_all(user_id, "disabled")
+                n = revoke_user_tokens(self.conn, user_id)
             self.audit(
-                "user_disable" if disabled else "user_enable", "success", p.username, user_id, ip
+                "user_disable" if disabled else "user_enable",
+                "success",
+                p.username,
+                user_id,
+                ip,
+                tokens_revoked=n,
             )
         return self.user(user_id)
 
@@ -482,12 +520,14 @@ class Auth:
             passwords.check(new, p.username)
         except passwords.PasswordRefused as e:
             raise AuthError(422, str(e)) from None
-        self.conn.execute(
-            "UPDATE users SET password_hash = %s, password_changed_at = now(), updated_at = now()"
-            " WHERE id = %s",
-            (passwords.hash_password(new), p.user_id),
-        )
-        self.audit("password_change", "success", p.username, p.user_id, ip)
+        with self.conn.transaction():
+            self.conn.execute(
+                "UPDATE users SET password_hash = %s, password_changed_at = now(),"
+                " updated_at = now() WHERE id = %s",
+                (passwords.hash_password(new), p.user_id),
+            )
+            n = revoke_user_tokens(self.conn, p.user_id)
+            self.audit("password_change", "success", p.username, p.user_id, ip, tokens_revoked=n)
 
     # --- MFA (TOTP, RFC 6238) -----------------------------------------------------------
 
@@ -525,7 +565,13 @@ class Auth:
         )
         return cur.rowcount == 1
 
-    def mfa_enrol(self, p: Principal, ip: str) -> dict:
+    def mfa_enrol(self, p: Principal, ip: str, password: str | None = None) -> dict:
+        """A signed-in user re-authenticates; a user still in the "enrol" stage has just
+        entered the password at sign-in."""
+        if p.stage == "full":
+            if not password:
+                raise AuthError(422, "Enter your current password to set up MFA.")
+            self._check_password(p, password, ip)
         if self._mfa(p.user_id, confirmed=True):
             raise AuthError(409, "MFA is already on. Turn it off first to enrol a new device.")
         secret = pyotp.random_base32()
@@ -655,7 +701,8 @@ class Auth:
 
 def admin_reset(conn: psycopg.Connection, username: str, password: str) -> dict:
     """Break-glass (host CLI, database owner): a new password, MFA cleared, the account enabled
-    and unlocked, every session revoked. The user enrols MFA again at the next sign-in."""
+    and unlocked, every session and API token revoked. The user enrols MFA again at the next
+    sign-in."""
     name = username.strip().lower()
     try:
         passwords.check(password, name)
@@ -671,11 +718,26 @@ def admin_reset(conn: psycopg.Connection, username: str, password: str) -> dict:
             raise AuthError(404, f"no user {name}")
         conn.execute("DELETE FROM recovery_codes WHERE user_id = %s", (user["id"],))
         conn.execute("DELETE FROM user_mfa WHERE user_id = %s", (user["id"],))
-        conn.execute("DELETE FROM auth_throttle WHERE key = %s", (_key("user", name),))
+        conn.execute(
+            "DELETE FROM auth_throttle WHERE key = ANY(%s)",
+            ([_key("user", name), _key("mfa", str(user["id"]))],),
+        )
         conn.execute(
             "UPDATE sessions SET revoked_at = now(), revoked_reason = 'admin reset'"
             " WHERE user_id = %s AND revoked_at IS NULL",
             (user["id"],),
         )
-        events.record(conn, "admin_reset", "success", "cli:admin-reset", str(user["id"]))
+        n = revoke_user_tokens(conn, user["id"])
+        events.record(
+            conn, "admin_reset", "success", "cli:admin-reset", str(user["id"]), tokens_revoked=n
+        )
     return user
+
+
+def revoke_user_tokens(conn: psycopg.Connection, user_id) -> int:
+    """Every API token of the user (password or role change, disable, admin reset)."""
+    cur = conn.execute(
+        "UPDATE api_tokens SET revoked_at = now() WHERE user_id = %s AND revoked_at IS NULL",
+        (user_id,),
+    )
+    return cur.rowcount
