@@ -2,21 +2,24 @@
 
 Root rules in [../CLAUDE.md](../CLAUDE.md) apply. Design: [../docs/design.md](../docs/design.md), section "Platform and UI". The UX specs in `docs/ux/` (planned, Phase 11) are the spec for every screen; build from them.
 
-Status: built: runs board, run workspace (phase rail, attempts, live activity), profile review, approval report, TA registry; the /api/engine proxy and proxy.ts (Host allowlist, CSP nonce). Rules marked "planned" apply when that part lands.
+Status: built: runs board, run workspace (phase rail, attempts, live activity), profile review, approval report, TA registry; the /api/engine proxy and proxy.ts (Host allowlist, CSP nonce, sign-in redirect); Phase 13 sign-in, MFA step, recovery code, first-run setup, MFA enrolment, account security, API tokens, users and audit log screens. Rules marked "planned" apply when that part lands.
 
 ## Language and tooling
 - TypeScript (strict), Next.js App Router, shadcn/ui components on Tailwind.
 - Use shadcn/ui components before writing custom ones.
 - ESLint (`npm run lint`) and TypeScript (`npm run typecheck`); `npm audit` runs in `make security`.
 - Commit `package-lock.json`; install with `npm ci`.
+- e2e (`npx playwright test`, after `npm run build`): the engine is mocked in the browser. Every page test starts with a session cookie (`playwright.config.ts`) and `/auth/me` mocked as an admin (`test` from `e2e/fixtures.ts`); use `signedInAs(page, "viewer")` for the viewer run. `e2e/a11y.spec.ts` runs axe-core (already in the tree) on each new screen as admin and viewer.
 
 ## Architecture
 - The UI holds no business logic and is never a security control; authorization lives in the engine.
-- It reads job state and ledger events from FastAPI (server-sent events). Today it sends upload, confirm profile, approve and reject. As the API grows, it sends every action the API exposes to the user's role, and nothing else.
+- It reads job state and ledger events from FastAPI (server-sent events). Today it sends upload, confirm profile, approve and reject (admin); setup, sign in, MFA code or recovery code, sign out; own account: change password, MFA enrol/confirm/disable, new recovery codes, revoke a session, sign out everywhere, create and revoke API tokens; admin: add user, change role, disable, enable, sign a user out everywhere. It reads `/auth/me`, sessions, tokens, users (admin) and the audit log. As the API grows, it sends every action the API exposes to the user's role, and nothing else.
+- Every engine path and method is allowlisted in `app/api/engine/[...path]/route.ts`; a new engine route needs a line there and a case in `e2e/proxy.spec.ts`. The proxy forwards only the `__Host-pmx_session` cookie, the browser's Origin (when it is on the allowed list) and the last `X-Forwarded-For` hop, and passes the engine's `Set-Cookie` back unchanged.
 - The engine URL comes from server-side environment variables. No secrets in client code or `NEXT_PUBLIC_*` variables.
-- App shell (Phase 15, planned): route groups `(auth)` for login and MFA, `(app)` for the shell with navigation; every screen lives inside one of them.
-- Sessions (Phase 13, planned): the engine's `__Host-` session cookie only; nothing about the session in local storage or session storage.
-- Admin actions (planned): `<AdminOnly>` is the one pattern; viewers see the action disabled with "Admin only".
+- Route groups: `(auth)` (`/login`, `/login/mfa`, `/login/recovery`, `/setup`, `/mfa/enrol`; minimal frame, no navigation) and `(app)` (everything else, inside `components/auth/shell.tsx`). Every screen lives inside one of them. The full app shell (sidebar, context switcher) is Phase 15, planned.
+- Sessions: the engine's `__Host-pmx_session` cookie only (HttpOnly, set and cleared by the engine through `/api/engine`). Nothing about the session, tokens or codes in local storage, session storage, `NEXT_PUBLIC_*` or URLs. `proxy.ts` sends a page request with no cookie to `/login?next=<path>`; the shell asks `GET /auth/me` before rendering anything and routes by stage (`mfa` → `/login/mfa`, `enrol` → `/mfa/enrol`, 401 → `/login?next=…&ended=1`). `next` is always passed through `safeNext` (`lib/next-path.ts`): same-origin paths only.
+- Shown-once values (API token, recovery codes, MFA secret) live only in the component state of the dialog or step that shows them and are dropped when it closes.
+- Admin actions: `<AdminOnly>` (`components/auth/session.tsx`) is the one pattern; viewers see the control with `aria-disabled`, a lock and the description "Admin only", and its click does nothing. It is display only; the engine refuses viewers anyway. `useSession()` gives `me` and `isAdmin`.
 - Secret fields (planned): write-only. Show "set" with the last update time and a "replace" action; never render or prefill a secret value.
 
 ## Safety conventions
