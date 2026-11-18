@@ -13,8 +13,7 @@ import time
 import zipfile
 
 import pytest
-from conftest import FIXTURES, settings
-from fastapi.testclient import TestClient
+from conftest import FIXTURES, api_client, settings, sign_in
 
 from parsemaxxing.api import app as api
 from parsemaxxing.api import intake
@@ -27,8 +26,8 @@ MANIFEST = (FIXTURES / "acme_fw.manifest.json").read_bytes()
 def client(pg, pg_dsn, tmp_path):
     s = dataclasses.replace(settings(tmp_path), runs_dir=tmp_path / "runs")
     app = api.create_app(s, dsn=pg_dsn, migrate=True)
-    headers = {api.CSRF_HEADER: "1"}  # what the web UI sends; a cross-site page cannot
-    with TestClient(app, base_url="http://localhost", headers=headers) as c:
+    with api_client(app) as c:  # the custom header a cross-site page cannot send
+        sign_in(c, pg.conn, "admin1")
         yield c
 
 
@@ -409,7 +408,9 @@ def test_every_response_has_its_own_request_id(client):
 def test_http_errors_use_the_envelope(client):
     assert _envelope(client.get("/runs/abcd1234"), 404, "not_found")["message"] == "no such run"
     assert _envelope(client.get("/nowhere"), 404, "not_found")
-    assert _envelope(client.post("/runs/abcd1234/reject"), 409, "conflict")
+    assert _envelope(client.post("/runs/abcd1234/reject"), 404, "not_found")  # object check
+    job = upload(client).json()["job"]
+    assert _envelope(client.post(f"/runs/{job}/reject"), 409, "conflict")
     assert _envelope(client.delete("/runs/abcd1234"), 405, "method_not_allowed")
 
 

@@ -206,15 +206,56 @@ def pg(pg_dsn):
     from parsemaxxing.ledger import store as db
 
     conn = db.connect(pg_dsn)
-    append_only = ("ledger", "ta_versions", "ta_events")
+    append_only = ("ledger", "ta_versions", "ta_events", "auth_events")
     with conn.transaction():
         for table in append_only:
             conn.execute(f"ALTER TABLE {table} DISABLE TRIGGER {table}_no_update")
             conn.execute(f"ALTER TABLE {table} DISABLE TRIGGER {table}_no_truncate")
         conn.execute("TRUNCATE ledger, ta_events, ta_versions, tas, jobs, usage")
+        conn.execute(
+            "TRUNCATE auth_events, sessions, api_tokens, recovery_codes, user_mfa, auth_throttle,"
+            " setup_token, users, secrets, vault_kek"
+        )
         for table in append_only:
             conn.execute(f"ALTER TABLE {table} ENABLE TRIGGER {table}_no_update")
             conn.execute(f"ALTER TABLE {table} ENABLE TRIGGER {table}_no_truncate")
         conn.execute("UPDATE settings SET value = 'false'::jsonb WHERE key = 'kill_switch'")
     yield db.Store(conn)
     conn.close()
+
+
+# --- signed-in API clients (Phase 13) --------------------------------------------------------
+
+TEST_PASSWORD = "synthetic-test-pass-4f8e1c"  # noqa: S105  # gitleaks:allow
+WEB_ORIGIN = "http://localhost:3000"
+
+
+def make_user(conn, username: str, role: str = "admin", password: str = TEST_PASSWORD) -> dict:
+    from parsemaxxing.auth.model import Role
+    from parsemaxxing.auth.service import Auth
+    from parsemaxxing.settings import AuthSettings
+
+    return Auth(conn, AuthSettings()).create_user("test", username, "", Role(role), password)
+
+
+def sign_in(client, conn, username: str, role: str = "admin") -> dict:
+    """Give `client` a full session for a new user (the login flow has its own tests)."""
+    from parsemaxxing.auth.policy import SESSION_COOKIE
+    from parsemaxxing.auth.service import Auth
+    from parsemaxxing.settings import AuthSettings
+
+    user = make_user(conn, username, role)
+    raw = Auth(conn, AuthSettings()).new_session(user["id"], "full", "testclient", "pytest")
+    client.cookies.set(SESSION_COOKIE, raw)
+    return user
+
+
+def api_client(app):
+    """A TestClient as the web proxy calls the engine: https, the custom header and the
+    web Origin on every request."""
+    from fastapi.testclient import TestClient
+
+    from parsemaxxing.api import app as api
+
+    headers = {api.CSRF_HEADER: "1", "Origin": WEB_ORIGIN}
+    return TestClient(app, base_url="https://localhost", headers=headers)

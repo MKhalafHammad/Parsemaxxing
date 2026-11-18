@@ -19,6 +19,8 @@ dependencies = [
     "regex>=2026.9",
     "python-multipart>=0.0.20",  # FastAPI file uploads
     "cryptography>=50.0.2",  # vault: AES-256-GCM (secrets/)
+    "argon2-cffi>=25.1",  # auth: Argon2id password hashes
+    "pyotp>=2.9",  # auth: TOTP (RFC 6238)
 ]
 
 [project.scripts]

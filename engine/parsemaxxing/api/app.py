@@ -1,23 +1,28 @@
-"""HTTP API for the UI: upload, runs, profile review, approve/reject, package download, and a
-server-sent event stream of the ledger (design "Platform and UI").
+"""HTTP API for the UI and the CLI: upload, runs, profile review, approve/reject, package
+download, TA rollback, and a server-sent event stream of the ledger (design "Platform and UI").
 
-Binds to localhost until Phase 13 (no login: residual risk R1). CORS allows only the
-web origin, the Host header must be a known name (DNS rebinding, T8.5), and every response
-carries security headers and an X-Request-ID. Every error is one envelope,
+Every route has a role policy (auth/policy.py, deny by default: the app refuses to build with
+a route that has none) and needs a session cookie or an API token unless it is in
+auth.policy.PUBLIC. CORS allows only the web origin, the Host header must be a known name (DNS
+rebinding, T8.5), every state-changing request needs the custom header and, when it carries a
+session cookie, an allowed Origin; every response carries security headers and an X-Request-ID.
+Every error is one envelope,
 {"error": {"code", "message", "request_id"}, "detail": message} ("detail" for the v1 web UI);
 unexpected errors say only "internal error" and are logged with the request id. All SQL goes
 through the parameterised Store.
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
+from functools import cache
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi import Path as PathParam
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,13 +32,24 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from parsemaxxing import config
 from parsemaxxing.api import intake
+from parsemaxxing.auth import events as audit
+from parsemaxxing.auth import policy
+from parsemaxxing.auth.model import AuthError
+from parsemaxxing.auth.policy import Admin, StoreDep, Viewer, client_ip
+from parsemaxxing.auth.routes import router as auth_router
+from parsemaxxing.auth.service import issue_setup_token
 from parsemaxxing.config import REPO, Settings, load_env_file
 from parsemaxxing.ledger import store as db
 from parsemaxxing.orchestrator import promote
 from parsemaxxing.orchestrator.worker import apply_corrections
+from parsemaxxing.secrets import Kek
+from parsemaxxing.tools.splunk_client import SplunkClient, SplunkError
 
 log = logging.getLogger("parsemaxxing.api")
 JobId = Annotated[str, PathParam(pattern=r"^[a-z0-9]{4,16}$")]
+TaName = Annotated[
+    str, PathParam(pattern=r"^TA-(parsemaxxing|parsewright)-[a-z0-9_:-]+$", max_length=120)
+]
 CSRF_HEADER = "X-Parsemaxxing"
 MAX_BODY = 31 * 1024 * 1024  # 10 MB sample + 20 MB manifest + form overhead
 MAX_STREAMS = 20
@@ -49,17 +65,22 @@ SECURITY_HEADERS = {
 REQUEST_ID = "X-Request-ID"
 CODES = {
     400: "bad_request",
+    401: "unauthorized",
     403: "forbidden",
     404: "not_found",
     405: "method_not_allowed",
     409: "conflict",
     413: "payload_too_large",
     422: "invalid_request",
+    429: "too_many_requests",
+    502: "bad_gateway",
     503: "unavailable",
 }
 
 
-def error(status: int, message: str, request_id: str = "") -> JSONResponse:
+def error(
+    status: int, message: str, request_id: str = "", headers: dict | None = None
+) -> JSONResponse:
     """The one error envelope. `message` is written for the client: never SQL, paths or
     stack traces (those go to the log with the request id)."""
     body = {
@@ -70,8 +91,10 @@ def error(status: int, message: str, request_id: str = "") -> JSONResponse:
         },
         "detail": message,  # v1 web UI reads this; remove once web/lib/api.ts reads "error"
     }
-    headers = {**SECURITY_HEADERS, REQUEST_ID: request_id} if request_id else SECURITY_HEADERS
-    return JSONResponse(body, status, headers=headers)
+    out = {**SECURITY_HEADERS, **(headers or {})}
+    if request_id:
+        out[REQUEST_ID] = request_id
+    return JSONResponse(body, status, headers=out)
 
 
 def _request_id(request: Request) -> str:
@@ -79,8 +102,12 @@ def _request_id(request: Request) -> str:
 
 
 def create_app(
-    settings: Settings | None = None, dsn: str | None = None, migrate: bool = False
+    settings: Settings | None = None,
+    dsn: str | None = None,
+    migrate: bool = False,
+    kek: Kek | None = None,
 ) -> FastAPI:
+    """`kek`: the vault key (tests); by default it is loaded from the KEK file at first use."""
     if settings is None:
         load_env_file(REPO / ".env")
         settings = config.runtime()
@@ -94,6 +121,18 @@ def create_app(
     app = FastAPI(title="Parsemaxxing", docs_url=None, redoc_url=None, openapi_url=None)
     web_origin = config.web_origin()
     hosts = set(config.allowed_hosts())
+    app.state.dsn = dsn
+    app.state.environ = config.environ()
+    app.state.kek = (lambda: kek) if kek is not None else _kek_loader()
+    app.state.trusted_proxies = [ipaddress.ip_network(n) for n in config.trusted_proxies()]
+    app.state.setup_token_path = promote.runs_root(settings.runs_dir) / "setup-token"
+    with db.connect(dsn) as conn:
+        if issue_setup_token(conn, app.state.setup_token_path):
+            # The path only, never the token (design 7.3 "First run").
+            log.warning(  # nosemgrep: python-logger-credential-disclosure
+                "no admin account yet: a one-time setup token (valid 60 minutes) is in %s",
+                app.state.setup_token_path,
+            )
     app.add_middleware(BodyLimit, limit=MAX_BODY, paths=("/uploads",))
     app.add_middleware(
         CORSMiddleware,
@@ -105,7 +144,12 @@ def create_app(
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         message = exc.detail if isinstance(exc.detail, str) else "request refused"
-        return error(exc.status_code, message, _request_id(request))
+        return error(exc.status_code, message, _request_id(request), exc.headers)
+
+    @app.exception_handler(AuthError)
+    async def auth_error(request: Request, exc: AuthError) -> JSONResponse:
+        retry = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+        return error(exc.status, exc.message, _request_id(request), retry)
 
     @app.exception_handler(RequestValidationError)
     async def invalid(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -130,10 +174,25 @@ def create_app(
         # can only send after a CORS preflight that names this origin; a foreign Origin is
         # refused outright. A plain multipart form POST from another site is "simple" and
         # would otherwise go through without a preflight (appsec Phase 5 H1).
+        # Phase 13: a request that carries the session cookie must also carry an Origin (browsers
+        # send one on every POST), so a cookie can never ride on an Origin-less request.
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             origin = request.headers.get("origin")
-            if request.headers.get(CSRF_HEADER) != "1" or (origin and origin != web_origin):
+            cookie = policy.SESSION_COOKIE in request.cookies
+            if (
+                request.headers.get(CSRF_HEADER) != "1"
+                or (origin and origin != web_origin)
+                or (cookie and not origin)
+            ):
                 return error(403, "cross-site request refused", rid)
+        # Deny by default before any body is read: no credential, no route (except PUBLIC).
+        if (
+            request.method != "OPTIONS"
+            and (request.method, request.url.path) not in policy.PUBLIC
+            and "authorization" not in request.headers
+            and policy.SESSION_COOKIE not in request.cookies
+        ):
+            return error(401, "Sign in first.", rid)
         try:
             response = await call_next(request)
         except Exception as exc:  # noqa: BLE001 - every error becomes the 500 envelope
@@ -153,17 +212,13 @@ def create_app(
         finally:
             conn.close()
 
-    def get_store() -> Iterator[db.Store]:
-        with connection() as s:
-            yield s
-
-    StoreDep = Annotated[db.Store, Depends(get_store)]
-
     def job_or_404(store: db.Store, job: str) -> dict:
         row = store.get(job)
         if row is None:
             raise HTTPException(404, "no such run")
         return row
+
+    app.include_router(auth_router)
 
     @app.get("/health")
     def health(store: StoreDep) -> dict:
@@ -174,6 +229,7 @@ def create_app(
 
     @app.post("/uploads", status_code=201)
     async def upload(
+        who: Admin,
         store: StoreDep,
         file: Annotated[UploadFile, File()],
         manifest: Annotated[UploadFile | None, File()] = None,
@@ -220,7 +276,9 @@ def create_app(
             key = f"{form['vendor']}:{form['product']}"
         else:
             key = f"upload:{sample.sha256[:16]}"
-        job_id, duplicate = store.enqueue(job, key, sample.sha256, str(path), form)
+        job_id, duplicate = store.enqueue(
+            job, key, sample.sha256, str(path), form, created_by=who.username
+        )
         return {
             "job": job_id,
             "duplicate": duplicate,
@@ -231,15 +289,15 @@ def create_app(
     # --- runs --------------------------------------------------------------------------
 
     @app.get("/runs")
-    def runs(store: StoreDep) -> list[dict]:
+    def runs(_: Viewer, store: StoreDep) -> list[dict]:
         return [_public(r) for r in store.jobs()]
 
     @app.get("/runs/{job}")
-    def get_run(job: JobId, store: StoreDep) -> dict:
+    def get_run(job: JobId, _: Viewer, store: StoreDep) -> dict:
         return _public(job_or_404(store, job), detail=True)
 
     @app.get("/runs/{job}/events")
-    def ledger(job: JobId, store: StoreDep, after: int = 0) -> list[dict]:
+    def ledger(job: JobId, _: Viewer, store: StoreDep, after: int = 0) -> list[dict]:
         job_or_404(store, job)
         return [_event(e) for e in store.events(job, after)]
 
@@ -252,7 +310,7 @@ def create_app(
         tz: str | None = Field(None, max_length=64)
 
     @app.post("/runs/{job}/profile")
-    def confirm_profile(job: JobId, body: Corrections, store: StoreDep) -> dict:
+    def confirm_profile(job: JobId, body: Corrections, _: Admin, store: StoreDep) -> dict:
         row = job_or_404(store, job)
         if row["status"] != "profile_review":
             raise HTTPException(409, f"run is {row['status']}, not profile_review")
@@ -279,22 +337,43 @@ def create_app(
         sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @app.post("/runs/{job}/approve")
-    def approve(job: JobId, body: Approval, store: StoreDep) -> dict:
+    def approve(job: JobId, body: Approval, who: Admin, request: Request, store: StoreDep) -> dict:
         job_or_404(store, job)
         records = promote.PgRecords(store.conn, settings.runs_dir)
         try:
-            return {"job": job, "result": promote.approve(records, job, body.sha256)}
+            result = promote.approve(records, job, body.sha256)
         except promote.TransitionRefused as e:
             raise HTTPException(409, str(e)) from None
+        audit.record(
+            store.conn,
+            "run_approve",
+            "success",
+            who.username,
+            who.user_id,
+            client_ip(request),
+            job=job,
+            sha256=body.sha256,
+        )
+        return {"job": job, "result": result}
 
     @app.post("/runs/{job}/reject")
-    def reject(job: JobId, store: StoreDep) -> dict:
+    def reject(job: JobId, who: Admin, request: Request, store: StoreDep) -> dict:
+        job_or_404(store, job)
         if not store.transition(job, "awaiting_approval", "rejected"):
             raise HTTPException(409, "only a run awaiting approval can be rejected")
+        audit.record(
+            store.conn,
+            "run_reject",
+            "success",
+            who.username,
+            who.user_id,
+            client_ip(request),
+            job=job,
+        )
         return {"job": job, "status": "rejected"}
 
     @app.get("/runs/{job}/package")
-    def download(job: JobId, store: StoreDep) -> FileResponse:
+    def download(job: JobId, _: Viewer, store: StoreDep) -> FileResponse:
         row = job_or_404(store, job)
         folder = promote.runs_root(settings.runs_dir) / job
         name = "promoted.tgz" if row["status"] == "done" else "test.tgz"
@@ -313,7 +392,7 @@ def create_app(
     # --- TA registry ---------------------------------------------------------------------
 
     @app.get("/tas")
-    def tas(store: StoreDep) -> list[dict]:
+    def tas(_: Viewer, store: StoreDep) -> list[dict]:
         return [
             {
                 "app": t["app"],
@@ -325,10 +404,59 @@ def create_app(
             for t in store.tas()
         ]
 
+    class Rollback(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        version: str = Field(pattern=r"^\d{1,6}\.\d{1,6}\.\d{1,6}$")
+
+    @app.post("/tas/{app_name}/rollback")
+    def rollback(
+        app_name: TaName, body: Rollback, who: Admin, request: Request, store: StoreDep
+    ) -> dict:
+        """Reinstall an exact earlier registered version (its kept, hash-checked bytes)."""
+        if store.ta(app_name) is None:
+            raise HTTPException(404, "no such TA in the registry")
+        if not any(v["version"] == body.version for v in store.ta_versions(app_name)):
+            raise HTTPException(404, "no such version of this TA")
+
+        def outcome(result: str, **detail) -> None:
+            audit.record(
+                store.conn,
+                "ta_rollback",
+                result,
+                who.username,
+                who.user_id,
+                client_ip(request),
+                app=app_name,
+                version=body.version,
+                **detail,
+            )
+
+        try:
+            message = promote.rollback(
+                store,
+                settings.runs_dir,
+                app_name,
+                body.version,
+                SplunkClient(settings),
+                settings.packages_dir,
+                out=lambda line, *_: log.info("rollback %s: %s", app_name, line),
+            )
+        except promote.TransitionRefused as e:  # its messages are written for the operator
+            outcome("failure", reason=type(e).__name__)
+            raise HTTPException(409, str(e)) from None
+        except (SplunkError, ValueError, RuntimeError) as e:  # these can name paths: log only
+            outcome("failure", reason=type(e).__name__)
+            log.warning("request %s: rollback refused: %s", _request_id(request), type(e).__name__)
+            status = 502 if isinstance(e, SplunkError) else 409
+            raise HTTPException(status, "rollback refused; see the engine log") from None
+        outcome("success")
+        return {"app": app_name, "version": body.version, "result": message}
+
     # --- live stream ---------------------------------------------------------------------
 
     @app.get("/runs/{job}/stream")
-    async def stream(job: JobId, request: Request) -> StreamingResponse:
+    async def stream(job: JobId, _: Viewer, request: Request) -> StreamingResponse:
         with connection() as s:
             job_or_404(s, job)
         start = request.headers.get("last-event-id", "0")
@@ -349,15 +477,33 @@ def create_app(
         on: bool
 
     @app.get("/admin/status")
-    def admin_status(store: StoreDep) -> dict:
+    def admin_status(_: Viewer, store: StoreDep) -> dict:
         return {"kill_switch": store.kill_switch(), "tokens_today": store.tokens_today()}
 
     @app.post("/admin/kill")
-    def kill(body: Kill, store: StoreDep) -> dict:
+    def kill(body: Kill, who: Admin, request: Request, store: StoreDep) -> dict:
         store.set_kill_switch(body.on)
+        audit.record(
+            store.conn,
+            "kill_switch",
+            "success",
+            who.username,
+            who.user_id,
+            client_ip(request),
+            on=body.on,
+        )
         return {"kill_switch": store.kill_switch()}
 
+    policy.check_routes(app)  # fail closed: a route without a role policy stops the engine
     return app
+
+
+def _kek_loader() -> Callable[[], Kek]:
+    @cache
+    def load() -> Kek:
+        return Kek.load(config.kek_path())
+
+    return load
 
 
 async def _capped(gen: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
@@ -492,6 +638,7 @@ def _public(row: dict, detail: bool = False) -> dict:
         "job": row["id"],
         "status": row["status"],
         "source_key": row["source_key"],
+        "created_by": row.get("created_by"),
         "form": row["form"],
         "tokens": row.get("tokens", 0),
         "created_at": str(row["created_at"]),
