@@ -145,7 +145,7 @@
 | ID | Control | Where enforced | Test that proves it | Phase | Status | Owner agent |
 | --- | --- | --- | --- | --- | --- | --- |
 | SET-1 | Outside `config/bootstrap`, no code reads `os.environ` for runtime settings | `settings/`, bootstrap module | Test that fails on any other `os.environ` read | 12 | Planned (`api/app.py` and `config.py` read the environment today) | engine |
-| SET-2 | Old `PARSEWRIGHT_*` variables refused at start, naming the new name | `config.py` | `test_config.py::test_old_variable_in_the_environment_is_refused`, `::test_old_variable_in_the_env_file_is_refused` | 11 | Built | engine |
+| SET-2 | Old `PARSEWRIGHT_*` variables refused at start, naming the new name | `config.py` | `test_config.py::test_old_variable_in_the_environment_is_refused`, `::test_old_variable_in_the_env_file_is_refused` | 11 | Partly built: host CLI and engine refuse them; a Docker `.env` check in `init_env.py` is open | engine |
 | SET-3 | Typed, bounded settings groups; versioned; every change in `settings_history` (secrets only "changed") | `settings/` | Validation and history tests | 12 | Planned | engine |
 | SET-4 | Settings scoped platform, environment, client; reads take the scope explicitly; no "current environment" global | `settings/` | Cross-environment isolation test | 12, 17 | Planned | engine |
 | SET-5 | Jobs read a settings snapshot at start and record its hash | `settings/`, `orchestrator/` | Snapshot test | 12 | Planned | engine |
@@ -185,7 +185,11 @@
 | DB-4 | TLS `verify-full` when PostgreSQL is not on the internal Docker network | `config.py` (DSN) | DSN test | 12 | Planned | devops |
 | DB-5 | `statement_timeout` on the app role | migrations or DSN | Timeout test | 12 | Planned | engine |
 | DB-6 | Encrypted backups (`pg_dump` to `age`) including the package store; restore tested in CI; retention at most 30 days advised | `cli.py` `backup`, `.github/workflows/ci.yml`, `docs/setup.md` | Restore test in CI | 12, 17b | Planned | devops |
-| DB-7 | Rename migration backs up first and is safe to run twice | `ledger/migrations/005_rename_to_parsemaxxing.sql`, `scripts/migrate_v1_volumes.sh` | `ledger/test_migrations.py::test_005_is_safe_to_run_twice`; `tests/test_migrate_v1_volumes.py::test_non_empty_new_volume_is_never_overwritten` | 11 | Built | devops |
+| DB-7 | Rename migration is safe to run twice; the v1 volumes are backed up before they are copied (005 itself takes no backup) | `ledger/migrations/005_rename_to_parsemaxxing.sql`, `scripts/migrate_v1_volumes.sh` | `ledger/test_migrations.py::test_005_is_safe_to_run_twice`; `tests/test_migrate_v1_volumes.py::test_non_empty_new_volume_is_never_overwritten` | 11 | Built | devops |
+| DB-8 | A leftover `parsewright_app` role that cannot be dropped loses its login | `005_rename_to_parsemaxxing.sql` | `ledger/test_migrations.py` | 11 | Built | engine |
+| BLD-1 | The repo-root build context exposes only `LICENSE` and `NOTICE` (root `.dockerignore`) | `.dockerignore`, `docker-compose.yml` | Manual build check in Phase 11; automated in Phase 12 | 11 | Built | devops |
+| PRB-1 | Lab probe writes need `--lab-write`, touch only `__test_probe` apps, and `shc-push` needs the deployer's GUID | `tools/probes/` | `tools/test_lab_probes.py` | 11 | Built | splunk |
+| DATA-9 | v1 volume backups (they hold real samples) are deleted within 30 days | `docs/setup.md`, `scripts/migrate_v1_volumes.sh` | None yet | 21 | Planned | devops |
 
 ## Docker
 

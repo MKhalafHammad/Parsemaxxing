@@ -206,7 +206,7 @@ Splunk Web is at http://localhost:8000 (user `admin`, password `SPLUNK_PASSWORD`
 
 1. Stop the old stack, keeping its data: `docker compose -p parsewright down` (never add `-v`).
 2. In `.env`, rename every `PARSEWRIGHT_*` key to `PARSEMAXXING_*` and set `PARSEMAXXING_TEST_INDEX=pmx_test`. The engine refuses to start while an old key is set, and names the new one.
-3. Run `make up`. It backs up the old `parsewright_*` volumes into `backups/`, copies them into the new `parsemaxxing_*` volumes, and leaves the old ones in place. The database migration renames the app role to `parsemaxxing_app`.
+3. Run `make up`. It backs up the old `parsewright_*` volumes into `backups/`, copies them into the new `parsemaxxing_*` volumes, and leaves the old ones in place. The database migration renames the app role to `parsemaxxing_app`. The backup holds your v1 runs, so it can contain real log samples: delete `backups/v1-volumes-*` once the upgrade works, and within 30 days at most.
 4. Add-ons you already built keep their `TA-parsewright-*` names and can still be updated and rolled back. New add-ons are named `TA-parsemaxxing-*`. The old `pw_test` index is left alone; remove it by hand when you no longer need it.
 
 ## Licence
