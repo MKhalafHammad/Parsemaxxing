@@ -1,7 +1,7 @@
 """HTTP API for the UI: upload, runs, profile review, approve/reject, package download, and a
 server-sent event stream of the ledger (design "Platform and UI").
 
-Binds to localhost in the hackathon build (no login: residual risk R1). CORS allows only the
+Binds to localhost until Phase 13 (no login: residual risk R1). CORS allows only the
 web origin, the Host header must be a known name (DNS rebinding, T8.5), and every response
 carries security headers. All SQL goes through the parameterised Store.
 """

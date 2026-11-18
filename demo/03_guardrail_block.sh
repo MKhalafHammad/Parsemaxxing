@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RECORD THIS: guardrails stopping an attack (Phase 4).
+# Scenario: guardrails stopping an attack (Phase 4).
 #
 # Shows: a log line carrying a prompt injection; a (simulated) compromised model's CIM proposal
 # blocked by the gate with its reason and never deployed; a subtler constant that passes the

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RECORD THIS: the first agent fix loop (Phase 2).
+# Scenario: the first agent fix loop (Phase 2).
 #
 # Shows: the Index-time agent's first proposal sets TZ = UTC for logs written in Tokyo time with
 # no offset. The Validator catches "60/60 events wrong, offset +32400 s" (9 hours) and returns

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RECORD THIS: the approval report (Phase 6).
+# Scenario: the approval report (Phase 6).
 #
 # Shows: raw vs parsed side by side with highlights, the mapping table and CIM scores, then
 # approve and download the .tgz; a log line containing a <script> tag renders as plain text.

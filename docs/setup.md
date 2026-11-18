@@ -13,6 +13,9 @@ Every step from an empty machine to an approved add-on, then configuration, usag
 - [Step 6: Start the first run](#step-6-start-the-first-run)
 - [Step 7: Review and approve](#step-7-review-and-approve)
 - [Messages that are safe to ignore](#messages-that-are-safe-to-ignore)
+- [Upgrading from Parsewright (v1.0.0)](#upgrading-from-parsewright-v100)
+- [Licence](#licence)
+- [Real log retention](#real-log-retention)
 - [Stop, restart or reset](#stop-restart-or-reset)
 - [Configuration](#configuration)
 - [Usage](#usage)
@@ -210,6 +213,14 @@ Splunk Web is at http://localhost:8000 (user `admin`, password `SPLUNK_PASSWORD`
 
 Parsemaxxing is source-available, not open source. Versions up to and including v1.0.0 (released as Parsewright) are under the MIT License and stay that way. Everything after v1.0.0, including v2, is under the [PolyForm Shield License 1.0.0](../LICENSE): you may use, change and run it for any purpose, including inside your company or as an MSSP serving your own clients, but not to offer a product or service that competes with it, paid or free. Add-ons it generates for you are yours. The name and logo are covered by [TRADEMARKS.md](../TRADEMARKS.md), and third-party components keep their own licences ([THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)).
 
+## Real log retention
+
+Planned (Phase 21, design 7.19). Today nothing is deleted on a schedule: use synthetic logs, or remove real samples and their jobs yourself.
+
+When it lands: real samples (uploaded or pulled from Splunk), their copies in the `pmx_` test index, raw lines in evidence, reports and transcripts, and masking maps are deleted 30 days after the job ends by default. An admin can shorten this per client down to 0 days; nothing is kept longer than 30 days. Job metadata, ledger events, check results and numbers, add-on versions and each version's masked regression set stay.
+
+**Do not keep backups longer than 30 days**, so real logs in them age out too.
+
 ## Stop, restart or reset
 
 ```bash
@@ -291,10 +302,10 @@ CI runs `make lint`, `make test` and `make security` on every pull request (not 
 │   └── tests/               engine tests
 ├── web/                     Next.js + shadcn/ui UI (built)
 ├── docs/                    design.md (source of truth), setup.md, features.md, threat-model.md,
-│                            lab-findings.md, build-plan.md, build-log.md, demo-script.md
+│                            lab-findings.md, build-plan.md, build-log.md, knowledge-sources.md
 ├── scripts/                 one-command setup (up.sh, Splunk bootstrap), first run, commit-msg hook
 ├── lab/                     licensed add-ons you download (CIM); git-ignored packages
-├── demo/                    repeatable scripts for each demo moment
+├── demo/                    repeatable scenario scripts
 ├── tests/                   repo tooling tests
 ├── .claude/                 project settings and subagents for Claude Code
 ├── .github/workflows/       CI

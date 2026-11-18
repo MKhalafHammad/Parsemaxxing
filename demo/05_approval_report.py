@@ -1,4 +1,4 @@
-"""RECORD THIS: the approval report (Phase 6). Run through demo/05_approval_report.sh.
+"""Scenario: the approval report (Phase 6). Run through demo/05_approval_report.sh.
 
 Uploads the prompt-injection fixture (one line carries an injected instruction and a <script>
 tag) with profile review skipped, waits until it awaits approval, then prints the page to open:

@@ -1,4 +1,4 @@
-"""RECORD THIS: a parser update (Phase 7). Run through demo/06_parser_update.sh.
+"""Scenario: a parser update (Phase 7). Run through demo/06_parser_update.sh.
 
 patch     (default) firmware v2 samples (src renamed src_ip, ISO 8601 timestamps instead of
           epoch milliseconds) against a promoted firewall TA. Diagnose finds the failing

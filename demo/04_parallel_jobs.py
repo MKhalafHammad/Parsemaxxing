@@ -1,4 +1,4 @@
-"""RECORD THIS: parallel jobs (Phase 5). Run through demo/04_parallel_jobs.sh.
+"""Scenario: parallel jobs (Phase 5). Run through demo/04_parallel_jobs.sh.
 
 Uploads four fixtures at once; three run straight through while the fourth (no auto-approve)
 pauses for profile review and frees its worker; then confirms that profile and it resumes.

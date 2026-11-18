@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RECORD THIS: just the log, no answer key.
+# Scenario: just the log, no answer key.
 #
 #   demo/08_log_only.sh [fw]      a fresh firewall log alone: built and proven on every event
 #                                 with no manifest; the report lists the agents' decisions
