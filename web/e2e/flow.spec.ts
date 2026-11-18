@@ -1,6 +1,4 @@
-import { expect, test } from "@playwright/test";
-
-import { LEDGER, mockRun, run } from "./fixtures";
+import { expect, LEDGER, mockRun, run, test } from "./fixtures";
 
 test("keyboard-only: upload, confirm the profile, approve", async ({ page }) => {
   const posts: { url: string; csrf: string | null }[] = [];

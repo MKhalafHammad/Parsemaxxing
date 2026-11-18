@@ -1,4 +1,34 @@
-import type { Page, Route } from "@playwright/test";
+import { test as base, type Page, type Route } from "@playwright/test";
+
+export { expect } from "@playwright/test";
+
+export const user = (role: "admin" | "viewer", extra: Record<string, unknown> = {}) => ({
+  id: role === "admin" ? "00000000-0000-4000-8000-000000000001" : "00000000-0000-4000-8000-000000000002",
+  username: role === "admin" ? "avery" : "riley",
+  display_name: role === "admin" ? "Avery Admin" : "Riley Viewer",
+  role,
+  source: "local",
+  mfa: role === "admin",
+  disabled: false,
+  last_login_at: "2026-11-19 09:00:00+00:00",
+  created_at: "2026-11-01 09:00:00+00:00",
+  ...extra,
+});
+
+/** Mock GET /auth/me (later routes win in Playwright, so a test can call this again). */
+export const signedInAs = (page: Page, role: "admin" | "viewer", stage = "full") =>
+  page.route("**/api/engine/auth/me", (r) => r.fulfill({ json: { user: user(role), stage, via: "session" } }));
+
+/** Every page test starts signed in as an admin with MFA. */
+export const test = base.extend<{ session: void }>({
+  session: [
+    async ({ page }, use) => {
+      await signedInAs(page, "admin");
+      await use();
+    },
+    { auto: true },
+  ],
+});
 
 export const XSS = '<script>alert(1)</script><img src=x onerror="alert(2)">';
 

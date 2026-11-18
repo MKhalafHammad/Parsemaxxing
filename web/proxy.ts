@@ -3,14 +3,23 @@
 //    before anything renders or reaches the engine (threat T8.5).
 // 2. A per-request CSP nonce, so scripts need no 'unsafe-inline' (Next.js attaches the nonce
 //    to its own scripts).
+// 3. A page outside (auth) with no session cookie goes to /login?next=<this path>. Only the
+//    cookie's presence is checked here; the engine decides whether the session is valid.
 import { NextResponse, type NextRequest } from "next/server";
 
 import { errorResponse } from "@/lib/error-envelope";
 import { allowedHost } from "@/lib/hosts";
+import { loginUrl } from "@/lib/next-path";
+
+const SESSION_COOKIE = "__Host-pmx_session";
+const OPEN = /^\/(api\/|login(\/|$)|setup$|mfa\/enrol$)/; // (auth) pages and the engine proxy
 
 export function proxy(req: NextRequest) {
   if (!allowedHost(req.headers.get("host"))) {
     return errorResponse(421, "misdirected_request", "unknown host");
+  }
+  if (!OPEN.test(req.nextUrl.pathname) && !req.cookies.has(SESSION_COOKIE)) {
+    return NextResponse.redirect(new URL(loginUrl(req.nextUrl.pathname + req.nextUrl.search), req.url));
   }
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
   const csp = [

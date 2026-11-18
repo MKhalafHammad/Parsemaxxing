@@ -1,6 +1,27 @@
+import { loginUrl } from "@/lib/next-path";
+
 // Client-side calls go only to this app's own /api/engine proxy. Every call carries the
 // custom header the proxy and the engine require for state changes (CSRF, threat T8.3).
 export const CSRF_HEADER = "X-Parsemaxxing";
+
+export type Role = "viewer" | "admin";
+export type User = {
+  id: string;
+  username: string;
+  display_name: string;
+  role: Role;
+  source: string;
+  mfa: boolean;
+  disabled: boolean;
+  last_login_at: string | null;
+  created_at: string;
+};
+export type Stage = "mfa" | "enrol" | "full";
+export type Me = { user: User; stage: Stage; via: string };
+export type SignedIn = { stage: Stage; user: User; recovery_codes_left?: number };
+export type Session = { id: string; created_at: string; last_seen_at: string; expires_at: string; ip: string; user_agent: string; current: boolean };
+export type ApiToken = { id: string; name: string; role: Role; owner: string; created_at: string; expires_at: string; last_used_at: string | null; status: "active" | "expired" | "revoked" };
+export type AuditEvent = { id: number; at: string; actor: string; user_id: string | null; event: string; outcome: string; ip: string; detail: Record<string, unknown> };
 
 export type Job = {
   job: string;
@@ -113,6 +134,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     cache: "no-store",
   });
   const body = await res.json().catch(() => ({}));
+  // A session that ended mid-use: back to sign-in, returning here afterwards. Sign-in and
+  // setup answer 401 for a wrong password or code, which their own pages show.
+  if (res.status === 401 && typeof window !== "undefined" && !/^\/(auth\/(login|me)|setup)/.test(path)) {
+    window.location.assign(loginUrl(window.location.pathname + window.location.search, true));
+  }
   if (!res.ok) {
     // Envelope: {"error": {code, message, request_id}, "detail": message}; `detail` alone is v1.
     const err = body?.error;

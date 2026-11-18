@@ -6,7 +6,15 @@ import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
-  use: { baseURL: "http://localhost:3100", trace: "retain-on-failure" },
+  use: {
+    baseURL: "http://localhost:3100",
+    trace: "retain-on-failure",
+    // A session cookie, so proxy.ts lets pages render; /auth/me is mocked in e2e/fixtures.ts.
+    storageState: {
+      cookies: [{ name: "__Host-pmx_session", value: "e2e-session", domain: "localhost", path: "/", expires: -1, httpOnly: true, secure: true, sameSite: "Strict" }],
+      origins: [],
+    },
+  },
   webServer: {
     command: "cp -r .next/static .next/standalone/.next/ && node .next/standalone/server.js",
     url: "http://localhost:3100",

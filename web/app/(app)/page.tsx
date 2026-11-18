@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ActorAvatar, ActorName } from "@/components/actors/actor";
+import { AdminOnly } from "@/components/auth/session";
 import { NewRunSheet } from "@/components/board/new-run-sheet";
 import { Button } from "@/components/ui/button";
 import { ErrorText } from "@/components/ui/error-text";
@@ -88,9 +89,11 @@ export default function Home() {
           <h1 className="text-xl font-semibold">Runs</h1>
           <p className="text-sm text-muted">Updates every few seconds. Open a run to follow it live.</p>
         </div>
-        <Button onClick={() => setSheet(true)}>
-          <Plus aria-hidden className="h-4 w-4" /> New run
-        </Button>
+        <AdminOnly>
+          <Button onClick={() => setSheet(true)}>
+            <Plus aria-hidden className="h-4 w-4" /> New run
+          </Button>
+        </AdminOnly>
       </div>
       <p role="status" aria-live="polite" className="text-sm text-good empty:hidden">
         {message}

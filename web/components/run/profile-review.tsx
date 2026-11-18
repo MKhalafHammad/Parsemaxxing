@@ -4,6 +4,7 @@ import { PenLine, TriangleAlert, Undo2 } from "lucide-react";
 import { useState } from "react";
 
 import { ActorChip } from "@/components/actors/actor";
+import { AdminOnly, useSession } from "@/components/auth/session";
 import { Button } from "@/components/ui/button";
 import { ErrorText } from "@/components/ui/error-text";
 import { Input, Label } from "@/components/ui/input";
@@ -49,9 +50,11 @@ export function ProfileReview({ job, profile, onDone, needsTimezone = false }: {
   const [form, setForm] = useState<Form>(original);
   const [error, setError] = useState<string | Error>("");
   const [busy, setBusy] = useState(false);
+  const { isAdmin } = useSession();
 
   async function confirm(e: React.FormEvent) {
     e.preventDefault();
+    if (!isAdmin) return; // display only: the engine refuses a viewer anyway
     if (needsTimezone && !form.tz.trim()) {
       setError("Choose the timezone the timestamps are written in.");
       return;
@@ -76,6 +79,7 @@ export function ProfileReview({ job, profile, onDone, needsTimezone = false }: {
         <Input
           id={`pr-${id}`}
           value={form[id]}
+          readOnly={!isAdmin}
           onChange={(e) => setForm({ ...form, [id]: e.target.value })}
           aria-describedby={[hint ? `pr-${id}-hint` : "", changed ? `pr-${id}-changed` : ""].filter(Boolean).join(" ") || undefined}
         />
@@ -135,9 +139,11 @@ export function ProfileReview({ job, profile, onDone, needsTimezone = false }: {
           needsTimezone || !profile.timezone_in_timestamp ? "IANA name, e.g. UTC or Asia/Tokyo" : "Not needed: timestamps carry an offset",
         )}
         <div className="p-2 sm:col-span-2">
-          <Button type="submit" disabled={busy}>
-            {busy ? "Confirming…" : "Confirm profile"}
-          </Button>
+          <AdminOnly>
+            <Button type="submit" disabled={busy}>
+              {busy ? "Confirming…" : "Confirm profile"}
+            </Button>
+          </AdminOnly>
           {error && (
             <p role="alert" className="mt-2 text-sm text-bad">
               <ErrorText error={error} />

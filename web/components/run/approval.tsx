@@ -4,6 +4,7 @@ import { Download, ShieldAlert, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 
 import { ActorAvatar } from "@/components/actors/actor";
+import { AdminOnly } from "@/components/auth/session";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { ErrorText } from "@/components/ui/error-text";
@@ -299,12 +300,16 @@ export function DecisionBar({ run, onDone }: { run: RunDetail; onDone: () => voi
         </Button>
         {awaiting && (
           <>
-            <Button variant="destructive" onClick={() => setConfirming("reject")}>
-              Reject…
-            </Button>
-            <Button disabled={!hashed} onClick={() => setConfirming("approve")}>
-              Approve…
-            </Button>
+            <AdminOnly>
+              <Button variant="destructive" onClick={() => setConfirming("reject")}>
+                Reject…
+              </Button>
+            </AdminOnly>
+            <AdminOnly>
+              <Button disabled={!hashed} onClick={() => setConfirming("approve")}>
+                Approve…
+              </Button>
+            </AdminOnly>
           </>
         )}
       </div>

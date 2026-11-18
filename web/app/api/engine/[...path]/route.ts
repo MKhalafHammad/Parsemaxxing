@@ -8,6 +8,8 @@ import { allowedHost, allowedOrigin } from "@/lib/hosts";
 
 const ENGINE_URL = process.env.ENGINE_URL ?? "http://127.0.0.1:8080";
 const JOB = "[a-z0-9]{4,16}";
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const SESSION_COOKIE = "__Host-pmx_session";
 const ROUTES: { method: string; pattern: RegExp }[] = [
   { method: "GET", pattern: /^runs$/ },
   { method: "GET", pattern: new RegExp(`^runs/${JOB}$`) },
@@ -17,6 +19,12 @@ const ROUTES: { method: string; pattern: RegExp }[] = [
   { method: "POST", pattern: /^uploads$/ },
   { method: "POST", pattern: new RegExp(`^runs/${JOB}/(profile|approve|reject)$`) },
   { method: "POST", pattern: /^admin\/kill$/ },
+  // Phase 13 auth: setup, sign-in, own account, sessions, tokens, users (admin), audit log.
+  { method: "GET", pattern: /^(setup|audit|auth\/(me|sessions|tokens|users))$/ },
+  { method: "POST", pattern: /^(setup|auth\/(login|login\/mfa|logout|password|tokens|users|sessions\/revoke-all))$/ },
+  { method: "POST", pattern: /^auth\/mfa\/(enrol|confirm|disable|recovery-codes)$/ },
+  { method: "POST", pattern: new RegExp(`^auth/(sessions|tokens)/${UUID}/revoke$`) },
+  { method: "POST", pattern: new RegExp(`^auth/users/${UUID}/(role|disable|enable|sessions/revoke)$`) },
 ];
 
 async function forward(req: NextRequest, path: string[]): Promise<Response> {
@@ -47,6 +55,16 @@ async function forward(req: NextRequest, path: string[]): Promise<Response> {
     const v = req.headers.get(h);
     if (v) headers[h] = v;
   }
+  // Only the session cookie goes upstream (no other cookie of this host), with the browser's
+  // Origin (the engine checks it again on cookie-bearing state changes) and the client IP.
+  const session = req.cookies.get(SESSION_COOKIE)?.value;
+  if (session && /^[A-Za-z0-9_.~+/=-]{1,512}$/.test(session)) headers.cookie = `${SESSION_COOKIE}=${session}`;
+  const origin = req.headers.get("origin");
+  if (origin && allowedOrigin(origin)) headers.origin = origin;
+  // shortcut: Next.js keeps a client-sent X-Forwarded-For when the web port is exposed directly,
+  // so this hop is only trustworthy behind the https reverse proxy; the engine still validates it.
+  const ip = req.headers.get("x-forwarded-for")?.split(",").pop()?.trim();
+  if (ip && /^[0-9A-Fa-f:.]{2,45}$/.test(ip)) headers["x-forwarded-for"] = ip;
   const url = `${ENGINE_URL}/${target}${req.nextUrl.search}`;
   let upstream: Response;
   try {
@@ -68,6 +86,7 @@ async function forward(req: NextRequest, path: string[]): Promise<Response> {
     const v = upstream.headers.get(h);
     if (v) out.set(h, v);
   }
+  for (const c of upstream.headers.getSetCookie()) out.append("set-cookie", c); // unchanged
   if (target.endsWith("/stream")) out.set("X-Accel-Buffering", "no");
   return new Response(upstream.body, { status: upstream.status, headers: out });
 }
