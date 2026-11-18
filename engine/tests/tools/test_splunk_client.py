@@ -4,10 +4,10 @@ import json
 import pytest
 from conftest import settings
 
-from parsewright.ta_builder import package
-from parsewright.tools.splunk_client import SplunkClient, SplunkError, spl_name
+from parsemaxxing.ta_builder import package
+from parsemaxxing.tools.splunk_client import SplunkClient, SplunkError, spl_name
 
-APP = "TA-parsewright-acme-vpn__test_abcd1234"
+APP = "TA-parsemaxxing-acme-vpn__test_abcd1234"
 
 
 class FakeService:
@@ -35,18 +35,18 @@ def client(tmp_path):
     )
 
 
-@pytest.mark.parametrize("index", ["main", "pw", "_internal", "pw_x OR index=main"])
-def test_ingest_refuses_non_pw_indexes(client, index):
+@pytest.mark.parametrize("index", ["main", "pw", "_internal", "pmx_x OR index=main"])
+def test_ingest_refuses_non_pmx_indexes(client, index):
     with pytest.raises(ValueError):
         client.ingest(index, "acme:vpn__test_abcd1234_a1", "x", "src")
     assert client.deploy.posts == []
 
 
 def test_ingest_posts_to_receivers_simple(client):
-    client.ingest("pw_test", "acme:vpn__test_abcd1234_a1", "a\nb", "acme_vpn_json")
+    client.ingest("pmx_test", "acme:vpn__test_abcd1234_a1", "a\nb", "acme_vpn_json")
     path, kw = client.deploy.posts[0]
-    assert path == "receivers/simple" and kw["index"] == "pw_test" and kw["body"] == b"a\nb"
-    assert kw["host"] == "parsewright-sample"  # never the lab's real address
+    assert path == "receivers/simple" and kw["index"] == "pmx_test" and kw["body"] == b"a\nb"
+    assert kw["host"] == "parsemaxxing-sample"  # never the lab's real address
 
 
 @pytest.mark.parametrize(
@@ -58,9 +58,9 @@ def test_spl_names_cannot_inject(name):
 
 
 def test_count_scopes_by_index_and_sourcetype(client):
-    assert client.count("pw_test", "acme:vpn__test_abcd1234_a1") == 3
+    assert client.count("pmx_test", "acme:vpn__test_abcd1234_a1") == 3
     assert client.search.searches[0] == (
-        "| tstats count where index=pw_test sourcetype=acme:vpn__test_abcd1234_a1"
+        "| tstats count where index=pmx_test sourcetype=acme:vpn__test_abcd1234_a1"
     )
 
 
@@ -81,7 +81,7 @@ def test_install_rechecks_hash_and_location(tmp_path, client):
         client.install(moved)
 
 
-@pytest.mark.parametrize("app", ["Splunk_SA_CIM", "search", "TA-parsewright-acme-vpn"])
+@pytest.mark.parametrize("app", ["Splunk_SA_CIM", "search", "TA-parsemaxxing-acme-vpn"])
 def test_install_and_uninstall_refuse_non_test_apps(tmp_path, client, app):
     with pytest.raises(ValueError):
         client.uninstall(app)

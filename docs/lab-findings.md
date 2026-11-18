@@ -15,24 +15,24 @@
 | Q7 | How to run `btool check` without shell access to Splunk | Decision | Decided 2026-10-27 | Option 1: allowlist + typed values before deploy, fail on any splunkd warning after install |
 | Q8 | Ingest path: does `receivers/simple` apply line breaking and timestamps? | `probe_splunk` + `probe_install` | Answered 2026-10-27 | `receivers/simple` |
 | Q9 | Which capabilities does the deploy role need? | `probe_splunk` + `probe_install` | Answered 2026-10-27 | `admin_all_objects`, `edit_tcp`, `install_apps`, `list_all_objects`; one shared test index, no `indexes_edit` |
-| Q10 | CIM add-on installed, `pw_*` in the CIM index macros | Manual lab step + search-token check | Done 2026-10-27 | Lab prerequisite met |
+| Q10 | CIM add-on installed, `pmx_*` in the CIM index macros | Manual lab step + search-token check | Done 2026-10-27 | Lab prerequisite met |
 | Q11 | Does an in-place update (`update=true`) keep an admin's `local/`, and can the review see overrides? | `probe_update` | Answered 2026-10-28 | Yes: promote updates in place; flag overrides from the effective settings, with system defaults in code |
 
 ## Lab setup (OWNER ACTION, once)
 
 1. **Start Splunk:** the lab VM, or `make up` for the Docker stack. Log in to Splunk Web as `admin`.
-2. **Create the test index:** in Settings → Indexes, create `pw_probe`.
+2. **Create the test index:** in Settings → Indexes, create `pmx_probe`.
 3. **Create three roles** (Settings → Roles):
-   - **`parsewright_search`**
+   - **`parsemaxxing_search`**
      - Inherits nothing. Inherited index access cannot be removed in a child role, so inheriting `user` could widen what it can search.
      - Capability: `search`.
-     - Indexes searched by default and allowed: only `pw_*` and `_internal`.
+     - Indexes searched by default and allowed: only `pmx_*` and `_internal`.
      - Remove access to every other index.
-   - **`parsewright_deploy`**
+   - **`parsemaxxing_deploy`**
      - Inherits nothing.
      - Start with the capabilities in Q9's expectation and trim them after the probe.
-     - Allowed indexes: `pw_*`. This limits only what the role can search. Splunk does not limit which index a role can **write** to; see Q9.
-   - **`parsewright_drift`**
+     - Allowed indexes: `pmx_*`. This limits only what the role can search. Splunk does not limit which index a role can **write** to; see Q9.
+   - **`parsemaxxing_drift`**
      - Inherits nothing.
      - Capability: `search` (read-only).
      - Search filter set later (Phase 8).
@@ -50,10 +50,10 @@ scripts/probe.sh splunk
 Against the Docker stack, port 8089 is not published to your machine (by design). Run the Splunk probe inside the Compose network instead:
 
 ```bash
-docker run --rm --network parsewright_default \
+docker run --rm --network parsemaxxing_default \
   -e SPLUNK_HOST=splunk -e SPLUNK_PORT -e SPLUNK_SEARCH_TOKEN -e SPLUNK_DEPLOY_TOKEN \
   -e PYTHONPATH=/engine -v "$PWD/engine:/engine:ro" python:3.12-slim \
-  sh -c "pip install -q splunk-sdk==2.1.1 && python -m parsewright.tools.probes.probe_splunk"
+  sh -c "pip install -q splunk-sdk==2.1.1 && python -m parsemaxxing.tools.probes.probe_splunk"
 ```
 
 This passes only the two tokens the probe needs (exported by the `set -a` line above), never the whole `.env` with the admin and database passwords. It also mounts the source read-only.
@@ -90,7 +90,7 @@ Both probes print only usernames, roles, capability names, counts and pass/fail 
   - It is unavailable to accounts with Zero Data Retention.
   - The terms forbid sending sensitive, confidential or personal information to these discounted services. Use cases with personal information must use standard services.
 - **Decision:**
-  - **Parsewright uses standard mode.** Its input is customers' logs, which are confidential by nature, and the design's on-prem mode exists so logs never leave the network.
+  - **Parsemaxxing uses standard mode.** Its input is customers' logs, which are confidential by nature, and the design's on-prem mode exists so logs never leave the network.
   - The default `LLM_MODEL` names the standard model.
   - A contributor-mode variant may be set through `LLM_MODEL` **only for runs on synthetic fixtures**, for example to stretch the hackathon credits. Never with real logs.
   - Never in on-prem mode, and never as the default.
@@ -100,9 +100,9 @@ Both probes print only usernames, roles, capability names, counts and pass/fail 
 
 - **Why it matters:** the inner loop deploys, reloads (no restart) and ingests at once. If index-time settings (`LINE_BREAKER`, `TIME_FORMAT`, `TZ`) only apply after a restart, the loop design changes.
 - **How** (manual, about 10 minutes, after Q6 picks a deploy path):
-  1. Deploy a test app with `[pw_probe_lb]` containing `SHOULD_LINEMERGE = false` and `LINE_BREAKER = (;)`.
+  1. Deploy a test app with `[pmx_probe_lb]` containing `SHOULD_LINEMERGE = false` and `LINE_BREAKER = (;)`.
   2. Reload: `| rest /services/configs/conf-props/_reload` or the debug/refresh endpoint.
-  3. Ingest `a;b;c` with `sourcetype=pw_probe_lb` into `pw_probe`.
+  3. Ingest `a;b;c` with `sourcetype=pmx_probe_lb` into `pmx_probe`.
   4. Count. **3 events** means the reload applied index-time settings; **1 event** means it didn't.
   5. Repeat with a `TIME_FORMAT`/`TZ` change and compare `_time`.
 - **Expectation:** on a standalone instance a props reload is picked up by new inputs. Needs proof on this Splunk version (10.6.1 in Docker).
@@ -163,12 +163,12 @@ The design says to "write the new TA version to `/opt/splunk/etc/apps/TA-*/defau
 | Fits hash-bound approval (T3.5) | Yes, since the installed bytes are the approved `.tgz` | Weaker, since the installed state is rebuilt from calls |
 | Fits design ("`local/` never written") | Yes | **No**: conflicts with the parser-update rule that `local/` belongs to admins |
 
-- **Recommendation:** **A, package install.** In Docker, mount a dedicated volume read-only into `splunk` (for example `/opt/parsewright/packages`) and read-write into `engine`. Only `.tgz` files go there. On the VM, use the same path with a copy step.
+- **Recommendation:** **A, package install.** In Docker, mount a dedicated volume read-only into `splunk` (for example `/opt/parsemaxxing/packages`) and read-write into `engine`. Only `.tgz` files go there. On the VM, use the same path with a copy step.
 - **How to verify:**
-  1. Install a trivial `TA-parsewright-acme-probe__test_probe.tgz` with `parsewright_deploy`'s token, then confirm it appears in `apps/local`.
+  1. Install a trivial `TA-parsemaxxing-acme-probe__test_probe.tgz` with `parsemaxxing_deploy`'s token, then confirm it appears in `apps/local`.
   2. Try the same with the search token, which must be refused.
   3. Reinstall with `update=true` from a package whose `default/props.conf` has a different set of stanzas, then confirm the installed app holds exactly the new package's stanzas: a full replace, not a merge.
-- **Result (2026-10-27):** `scripts/probe.sh install`, which builds the packages in `PARSEWRIGHT_PACKAGES_DIR` (owned by the engine user, mode 755, readable by `splunk`):
+- **Result (2026-10-27):** `scripts/probe.sh install`, which builds the packages in `PARSEMAXXING_PACKAGES_DIR` (owned by the engine user, mode 755, readable by `splunk`):
   ```
   install with search token: refused HTTP 403 (good)
   install v1 with deploy token: ok
@@ -186,10 +186,10 @@ The design says to "write the new TA version to `/opt/splunk/etc/apps/TA-*/defau
   - Each attempt installs the complete add-on as a `.tgz` through `apps/local` with `update=true`, using the deploy token.
   - All agent-proposed stanzas are written by the escaping conf writer into `default/*.conf` inside the package. Nothing is written over the `configs/conf-*` endpoints, so `local/` is never touched.
   - The TA builder regenerates the full package on every attempt, with the stanzas from every stage so far, never a delta. `update=true` replaces `default/` as a whole, so a partial package would drop earlier stages' stanzas.
-  - Packages reach Splunk through a dedicated shared folder, `/opt/parsewright/packages`, mounted read-write in `engine` and read-only in `splunk`, holding only `.tgz` files. On the VM, a copy step puts them at the same path.
+  - Packages reach Splunk through a dedicated shared folder, `/opt/parsemaxxing/packages`, mounted read-write in `engine` and read-only in `splunk`, holding only `.tgz` files. On the VM, a copy step puts them at the same path.
   - Follow-ups:
     - Phase 2 adds the shared volume to `docker-compose.yml` for the Docker lab.
-    - On a Splunk running directly on the host, `PARSEWRIGHT_PACKAGES_DIR` is a plain directory: `/opt/parsewright/packages`, owned by the engine user, mode 755. Not `/tmp`, where any user could plant a package.
+    - On a Splunk running directly on the host, `PARSEMAXXING_PACKAGES_DIR` is a plain directory: `/opt/parsemaxxing/packages`, owned by the engine user, mode 755. Not `/tmp`, where any user could plant a package.
 
 ## Q7. `btool check` without shell access
 
@@ -219,7 +219,7 @@ The design says to "write the new TA version to `/opt/splunk/etc/apps/TA-*/defau
 - **Why it matters:** `data/inputs/oneshot` reads a file **on the Splunk host**, which needs the same shared volume as Q6A. `receivers/simple` takes the data in the POST body.
 - **How:** `probe_splunk` posts three lines in one request and reports whether they became 1 or 3 events. Then repeat Q3's test on this path, to confirm `LINE_BREAKER` and `TIME_FORMAT` from the test sourcetype apply.
 - **Expectation:** `receivers/simple` goes through the full parsing pipeline, so line breaking and timestamps apply. If the result shows 1 event, use oneshot from the Q6 shared volume instead.
-- **Result (2026-10-27):** `probe_splunk`, with the deploy token posting to `pw_probe` and the search token counting:
+- **Result (2026-10-27):** `probe_splunk`, with the deploy token posting to `pmx_probe` and the search token counting:
   ```
   receivers/simple: posted 3 lines, indexed 3 events (line breaking applied)
   ```
@@ -234,34 +234,34 @@ The design says to "write the new TA version to `/opt/splunk/etc/apps/TA-*/defau
   - `install_apps`, or `admin_all_objects` on some versions, to install and update apps;
   - `edit_local_apps`, if B were chosen;
   - `rest_apps_management`;
-  - ingest rights into `pw_*` (index access, plus `edit_tcp` for `receivers/simple`).
+  - ingest rights into `pmx_*` (index access, plus `edit_tcp` for `receivers/simple`).
 
   The search token must have none of these.
 - **Warning:** with `install_apps` and `edit_tcp`, the deploy token is effectively an admin token.
   - It can install an app that contains scripts, which runs code on the Splunk host.
   - It can write into any index (for example `receivers/simple?index=main`). Role index settings do not restrict writes.
   - Therefore:
-    - the `pw_` check in code is the only guard on the ingest target (T5.1);
+    - the `pmx_` check in code is the only guard on the ingest target (T5.1);
     - the deploy token lives only in the orchestrator process. It must never reach an agent, a prompt, the web process or the ledger.
 - **Result (2026-10-27, partial):** `probe_splunk` output:
   ```
-  search token: user=parsewright_search roles=['parsewright_search'] notable_caps=[]
-  deploy token: user=parsewright_deploy roles=['parsewright_deploy'] notable_caps=['admin_all_objects', 'edit_tcp', 'install_apps', 'rest_apps_management']
-  search pw_probe: count=0 (should run without error)
-  search other indexes: count=0 (expect 0: only pw_* and _internal visible)
+  search token: user=parsemaxxing_search roles=['parsemaxxing_search'] notable_caps=[]
+  deploy token: user=parsemaxxing_deploy roles=['parsemaxxing_deploy'] notable_caps=['admin_all_objects', 'edit_tcp', 'install_apps', 'rest_apps_management']
+  search pmx_probe: count=0 (should run without error)
+  search other indexes: count=0 (expect 0: only pmx_* and _internal visible)
   ```
-  - **Search token:** it has its own role only and none of the listed capabilities. Searching outside `pw_*` and `_internal` returns 0 events. The role was created with no inheritance, not inheriting `user` as the lab setup above first said, and new users were created without the default `user` role.
+  - **Search token:** it has its own role only and none of the listed capabilities. Searching outside `pmx_*` and `_internal` returns 0 events. The role was created with no inheritance, not inheriting `user` as the lab setup above first said, and new users were created without the default `user` role.
   - **Ingest:** without `edit_tcp` the deploy token's `receivers/simple` post was refused with **HTTP 403**. With `edit_tcp`, 3 lines were indexed. **`edit_tcp` is required.**
   - **App install (2026-10-27):** install, update and uninstall work with `admin_all_objects`, `edit_tcp`, `install_apps` and `rest_apps_management`, as shown in Q6's result.
   - **Trim, step 1: `admin_all_objects` is required.** With it removed, `install_apps` alone was not enough. Installing from a path on the host was refused:
     ```
     install v1 with deploy token: refused HTTP 403
     ```
-  - **Indexes:** with `indexes_edit` granted, the deploy token could create a `pw_` index, and the search token was refused (403). Even with `admin_all_objects`, though, the deploy token **could not delete** one (403). An engine that creates one index per attempt, as the design first said, would leave hundreds of indexes behind. Two empty probe indexes were left this way. A later index listing no longer showed them, so nothing was left to remove.
-  - **Trim, step 2:** with `rest_apps_management` and `indexes_edit` both removed, the full install probe still passed against the shared `pw_test` index:
+  - **Indexes:** with `indexes_edit` granted, the deploy token could create a `pmx_` index, and the search token was refused (403). Even with `admin_all_objects`, though, the deploy token **could not delete** one (403). An engine that creates one index per attempt, as the design first said, would leave hundreds of indexes behind. Two empty probe indexes were left this way. A later index listing no longer showed them, so nothing was left to remove.
+  - **Trim, step 2:** with `rest_apps_management` and `indexes_edit` both removed, the full install probe still passed against the shared `pmx_test` index:
     ```
-    deploy token: user=parsewright_deploy roles=['parsewright_deploy'] notable_caps=['admin_all_objects', 'edit_tcp', 'install_apps']
-    test index: pw_test (exists: True)
+    deploy token: user=parsemaxxing_deploy roles=['parsemaxxing_deploy'] notable_caps=['admin_all_objects', 'edit_tcp', 'install_apps']
+    test index: pmx_test (exists: True)
     install with search token: refused HTTP 403 (good)
     install v1 with deploy token: ok
     ingest right after install, no reload: 3 events (expect 3: LINE_BREAKER applied), _time matches TIME_FORMAT+TZ
@@ -270,36 +270,36 @@ The design says to "write the new TA version to `/opt/splunk/etc/apps/TA-*/defau
     ```
   - The probe now reports a rejected token's shape (length, part count, user, expiry) without printing it. A pasted-twice deploy token was found this way.
 - **Decision (2026-10-27, OWNER):**
-  - **One shared test index:** `PARSEWRIGHT_TEST_INDEX`, for example `pw_test`.
+  - **One shared test index:** `PARSEMAXXING_TEST_INDEX`, for example `pmx_test`.
     - An admin creates it once. The engine never creates or deletes indexes, so `indexes_edit` is **removed** from the deploy role.
     - Each job and attempt is identified by its sourcetype, `<st>__test_<job>_a<attempt>`.
     - Every Validator search filters on that exact sourcetype. Phase 4 adds an adversarial test that fails if any Validator search lacks the filter.
-    - Code still rejects any ingest target that isn't a `pw_` index.
+    - Code still rejects any ingest target that isn't a `pmx_` index.
   - **Size, not age, limits the index.** Set a size cap (`maxTotalDataSizeMB`), not an age-based retention (`frozenTimePeriodInSecs`). Sample events carry historical timestamps, so an age-based limit could freeze them before the Validator reads them.
   - **`list_all_objects` (found 2026-11-04, on a clean install):** the configuration endpoints need it: `configs/conf-*/_reload` for deploy, and `configs/conf-props` and `conf-transforms` reads for search. Splunk's `[default]` role settings turn it on, and the lab roles made in Splunk Web worked without naming it, but the deploy role made over REST was refused (403). `scripts/splunk_bootstrap.py` names it on both roles. Agents gain nothing from it: the search guard refuses `| rest`.
-  - **Final deploy role:** `admin_all_objects`, `edit_tcp`, `install_apps`, `list_all_objects`, with allowed indexes `pw_*`. It is near-admin, as the warning above expected, and accepted for the lab because:
+  - **Final deploy role:** `admin_all_objects`, `edit_tcp`, `install_apps`, `list_all_objects`, with allowed indexes `pmx_*`. It is near-admin, as the warning above expected, and accepted for the lab because:
     - the token lives only in the orchestrator process;
-    - code checks every app name (`TA-parsewright-…__test_…`) and every ingest target (`pw_`) before any call;
+    - code checks every app name (`TA-parsemaxxing-…__test_…`) and every ingest target (`pmx_`) before any call;
     - the threat model lists it as a residual risk.
 
 ## Q10. CIM add-on and index macros
 
 - **How:**
   1. Install the Splunk Common Information Model add-on from Splunkbase.
-  2. In its setup, or under Settings → Advanced search → Search macros, add `pw_*` to `cim_Authentication_indexes`, `cim_Network_Traffic_indexes` and `cim_Web_indexes`.
-  3. Verify with `| tstats summariesonly=false count from datamodel=Authentication where index=pw_probe`, which should run without error (count 0 is fine).
+  2. In its setup, or under Settings → Advanced search → Search macros, add `pmx_*` to `cim_Authentication_indexes`, `cim_Network_Traffic_indexes` and `cim_Web_indexes`.
+  3. Verify with `| tstats summariesonly=false count from datamodel=Authentication where index=pmx_probe`, which should run without error (count 0 is fine).
 - **Result (2026-10-27):** the owner installed the CIM add-on and edited the macros. Checked with the **search token**:
   ```
   cim_Authentication_indexes: definition='(index=pw*)'
   cim_Network_Traffic_indexes: definition='(index=pw*)'
   cim_Web_indexes: definition='(index=pw*)'
-  datamodel Authentication on pw_test: ran ok, count=0
-  datamodel Network_Traffic on pw_test: ran ok, count=0
-  datamodel Web on pw_test: ran ok, count=0
+  datamodel Authentication on pmx_test: ran ok, count=0
+  datamodel Network_Traffic on pmx_test: ran ok, count=0
+  datamodel Web on pmx_test: ran ok, count=0
   ```
   - The search role can read the macros and run all three data models.
-  - The macros say `pw*`, not `pw_*`, so they would also match a non-test index whose name starts with `pw`. That is harmless for Parsewright, because the search role can only see `pw_*` anyway, but `pw_*` is the exact form.
-  - Phase 10's bootstrap script writes `(index=pw_*)`.
+  - The macros say `pw*`, not `pmx_*`, so they would also match a non-test index whose name starts with `pw`. That is harmless for Parsemaxxing, because the search role can only see `pmx_*` anyway, but `pmx_*` is the exact form.
+  - Phase 10's bootstrap script writes `(index=pmx_*)`.
 - **Decision:** none needed; this is a lab prerequisite. Phase 10's bootstrap script automates it for judges.
 
 ## Q11. In-place updates and `local/` (Phase 7)
@@ -307,7 +307,7 @@ The design says to "write the new TA version to `/opt/splunk/etc/apps/TA-*/defau
 - **Why:** a parser update replaces a promoted TA in place. The design says `local/` (admin overrides) is kept and never written, and that the review flags overrides the patch collides with. Neither had been tested.
 - **How:** `scripts/probe.sh update`.
   1. Install a throwaway test add-on v1.0.0 and check its timestamps.
-  2. Write an admin-style override into its `local/` over REST (`TZ` and one extraction). This probe is the only place Parsewright writes `local/`.
+  2. Write an admin-style override into its `local/` over REST (`TZ` and one extraction). This probe is the only place Parsemaxxing writes `local/`.
   3. Reinstall a v1.1.0 with `update=true`: a new `TIME_FORMAT` for the same sourcetype and one new extraction.
   4. Read the effective settings in the app's context, then ingest new-format lines with no reload.
 - **Result (2026-10-28):**

@@ -33,7 +33,7 @@ export function ApprovalSummary({ report, phases, source }: { report: Report; ph
           </span>
         ) : source === "uploaded" ? (
           <span>
-            <strong>Checked against the uploaded manifest:</strong> an answer key supplied with the log, not verified by Parsewright; values it does not list were checked against their own lines.
+            <strong>Checked against the uploaded manifest:</strong> an answer key supplied with the log, not verified by Parsemaxxing; values it does not list were checked against their own lines.
           </span>
         ) : (
           <span>

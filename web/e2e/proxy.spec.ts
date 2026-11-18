@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 // The real Next.js server and proxy (no mocks): refusals happen before anything reaches the
 // engine. ENGINE_URL points at a closed port, so a request that IS forwarded gets 502.
-const SAME = { Origin: "http://localhost:3100", "X-Parsewright": "1" };
+const SAME = { Origin: "http://localhost:3100", "X-Parsemaxxing": "1" };
 
 test("DNS rebinding: an unknown Host is refused on pages and the API", async ({ request }) => {
   for (const path of ["/", "/runs/abcd1234", "/api/engine/runs", "/api/engine/admin/status"]) {
@@ -25,7 +25,7 @@ test("cross-site state changes are refused", async ({ request }) => {
     data,
   });
   expect(foreign.status()).toBe(403);
-  const noOrigin = await request.post("/api/engine/runs/abcd1234/approve", { headers: { "X-Parsewright": "1" }, data });
+  const noOrigin = await request.post("/api/engine/runs/abcd1234/approve", { headers: { "X-Parsemaxxing": "1" }, data });
   expect(noOrigin.status()).toBe(403);
   // Positive control: the same request from the UI's own origin is forwarded (closed engine: 502).
   const ok = await request.post("/api/engine/runs/abcd1234/approve", { headers: SAME, data });

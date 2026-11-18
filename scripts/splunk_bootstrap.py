@@ -1,10 +1,10 @@
-"""Prepare the bundled Splunk for Parsewright. Runs INSIDE the splunk container (scripts/up.sh
+"""Prepare the bundled Splunk for Parsemaxxing. Runs INSIDE the splunk container (scripts/up.sh
 pipes it to the container's python3), against https://127.0.0.1:8089, as admin, using the
 SPLUNK_PASSWORD the container already has. Port 8089 stays unpublished.
 
 Idempotent. Creates the test index, the three no-inheritance roles and users from
-docs/lab-findings.md (Q9), installs the CIM add-on from a package in /opt/parsewright/lab if
-it is not installed, points the CIM index macros at pw_*, then replaces each service user's
+docs/lab-findings.md (Q9), installs the CIM add-on from a package in /opt/parsemaxxing/lab if
+it is not installed, points the CIM index macros at pmx_*, then replaces each service user's
 tokens with one fresh token, valid 7 days (`make up` again renews them). Progress goes to stderr; the only stdout is KEY=VALUE token lines
 for scripts/env_set.py, which writes them to .env without printing them.
 
@@ -25,7 +25,7 @@ import sys
 import time
 import urllib.parse
 
-INDEX = os.environ.get("PW_TEST_INDEX", "pw_test")
+INDEX = os.environ.get("PMX_TEST_INDEX", "pmx_test")
 # `make up` mints new tokens each time; a short life limits a leaked deploy token (T7.4).
 TOKEN_LIFETIME = "+7d"  # nosec B105 - a duration, not a secret
 CIM_APP = "Splunk_SA_CIM"
@@ -33,39 +33,39 @@ CIM_MODELS = (
     "Authentication",
     "Network_Traffic",
     "Web",
-)  # engine/parsewright/cim_spec ROOT
+)  # engine/parsemaxxing/cim_spec ROOT
 # list_all_objects: read configs/conf-* (collision checks, effective props, _reload). Roles made
 # in Splunk Web inherit it from authorize.conf [default]; roles made here must name it.
 ROLES = {
-    # Search only pw_* and _internal (agents' searches and the Validator). Agents still cannot
+    # Search only pmx_* and _internal (agents' searches and the Validator). Agents still cannot
     # read config: the search guard refuses `| rest`.
-    "parsewright_search": {
+    "parsemaxxing_search": {
         "capabilities": ["list_all_objects", "search"],
-        "srchIndexesAllowed": ["pw_*", "_internal"],
-        "srchIndexesDefault": ["pw_*"],
+        "srchIndexesAllowed": ["pmx_*", "_internal"],
+        "srchIndexesDefault": ["pmx_*"],
     },
     # Install apps and ingest: the final deploy role from lab-findings Q9.
-    "parsewright_deploy": {
+    "parsemaxxing_deploy": {
         "capabilities": [
             "admin_all_objects",
             "edit_tcp",
             "install_apps",
             "list_all_objects",
         ],
-        "srchIndexesAllowed": ["pw_*"],
-        "srchIndexesDefault": ["pw_*"],
+        "srchIndexesAllowed": ["pmx_*"],
+        "srchIndexesDefault": ["pmx_*"],
     },
     # Read-only (the planned drift pipeline adds a search filter).
-    "parsewright_drift": {
+    "parsemaxxing_drift": {
         "capabilities": ["search"],
-        "srchIndexesAllowed": ["pw_*"],
-        "srchIndexesDefault": ["pw_*"],
+        "srchIndexesAllowed": ["pmx_*"],
+        "srchIndexesDefault": ["pmx_*"],
     },
 }
 TOKEN_ENV = {
-    "parsewright_search": "SPLUNK_SEARCH_TOKEN",
-    "parsewright_deploy": "SPLUNK_DEPLOY_TOKEN",
-    "parsewright_drift": "SPLUNK_DRIFT_TOKEN",
+    "parsemaxxing_search": "SPLUNK_SEARCH_TOKEN",
+    "parsemaxxing_deploy": "SPLUNK_DEPLOY_TOKEN",
+    "parsemaxxing_drift": "SPLUNK_DRIFT_TOKEN",
 }
 
 CTX = ssl.create_default_context()
@@ -150,8 +150,8 @@ def password():
 
 
 def main():
-    if not re.fullmatch(r"pw_[a-z0-9_-]{1,60}", INDEX):  # only pw_ test indexes, ever
-        log("FAILED: PARSEWRIGHT_TEST_INDEX must look like pw_<name>")
+    if not re.fullmatch(r"pmx_[a-z0-9_-]{1,60}", INDEX):  # only pmx_ test indexes, ever
+        log("FAILED: PARSEMAXXING_TEST_INDEX must look like pmx_<name>")
         sys.exit(1)
     wait_ready()
     must(
@@ -206,8 +206,8 @@ def main():
             log(f"user {user}: exists, role set")
 
     if call("GET", "/services/apps/local/" + CIM_APP)[0] == 404:
-        found = glob.glob("/opt/parsewright/lab/splunk-common-information-model-*.tgz")
-        found += glob.glob("/opt/parsewright/lab/Splunk_SA_CIM*.tgz")
+        found = glob.glob("/opt/parsemaxxing/lab/splunk-common-information-model-*.tgz")
+        found += glob.glob("/opt/parsemaxxing/lab/Splunk_SA_CIM*.tgz")
         if len(found) != 1 or os.path.islink(found[0]):
             log(
                 "FAILED: the CIM add-on is not installed; put exactly one CIM package "
@@ -231,12 +231,12 @@ def main():
     version = (
         ((app or {}).get("entry") or [{}])[0].get("content", {}).get("version", "?")
     )
-    log(f"CIM add-on: version {version} (Parsewright's checks are pinned to 8.7.0)")
+    log(f"CIM add-on: version {version} (Parsemaxxing's checks are pinned to 8.7.0)")
     for model in CIM_MODELS:
         macro = f"cim_{model}_indexes"
         path = f"/servicesNS/nobody/{CIM_APP}/admin/macros/{macro}"
-        must(call("POST", path, {"definition": "(index=pw_*)"})[0], "macro " + macro)
-    log("CIM index macros: (index=pw_*) for {}".format(", ".join(CIM_MODELS)))
+        must(call("POST", path, {"definition": "(index=pmx_*)"})[0], "macro " + macro)
+    log("CIM index macros: (index=pmx_*) for {}".format(", ".join(CIM_MODELS)))
 
     wait_tokens()
     # One fresh token per service user; earlier ones are deleted, so a rebuilt .env never
@@ -258,7 +258,7 @@ def main():
         status, made = call(
             "POST",
             "/services/authorization/tokens",
-            {"name": user, "audience": "parsewright", "expires_on": TOKEN_LIFETIME},
+            {"name": user, "audience": "parsemaxxing", "expires_on": TOKEN_LIFETIME},
         )
         must(status, "token for " + user)
         lines.append("{}={}".format(key, made["entry"][0]["content"]["token"]))

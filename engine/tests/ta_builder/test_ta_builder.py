@@ -2,11 +2,11 @@ import tarfile
 
 import pytest
 
-from parsewright.ta_builder import naming, package
-from parsewright.ta_builder.conf_writer import ConfValueError, write_conf
-from parsewright.ta_builder.naming import require_job, require_pw_index, require_test_app, ta_name
+from parsemaxxing.ta_builder import naming, package
+from parsemaxxing.ta_builder.conf_writer import ConfValueError, write_conf
+from parsemaxxing.ta_builder.naming import require_job, require_pmx_index, require_test_app, ta_name
 
-APP = "TA-parsewright-acme-vpn__test_abcd1234"
+APP = "TA-parsemaxxing-acme-vpn__test_abcd1234"
 
 
 # --- conf writer (adversarial: structure injection) -----------------------------------------
@@ -54,7 +54,7 @@ def test_ta_name_rejects_bad_parts(vendor):
 
 
 def test_names():
-    assert ta_name("acme", "vpn") == "TA-parsewright-acme-vpn"
+    assert ta_name("acme", "vpn") == "TA-parsemaxxing-acme-vpn"
     assert naming.test_app("acme", "vpn", "abcd1234") == APP
     assert naming.test_sourcetype("acme:vpn", "abcd1234", 2) == "acme:vpn__test_abcd1234_a2"
     with pytest.raises(ValueError):
@@ -65,14 +65,14 @@ def test_names():
         naming.test_sourcetype("source::x", "abcd1234", 1)
 
 
-@pytest.mark.parametrize("index", ["main", "pw", "pw_", "pw_*", "pw_x OR index=main", "PW_x"])
-def test_require_pw_index_rejects(index):
+@pytest.mark.parametrize("index", ["main", "pw", "pmx_", "pmx_*", "pmx_x OR index=main", "PW_x"])
+def test_require_pmx_index_rejects(index):
     with pytest.raises(ValueError):
-        require_pw_index(index)
+        require_pmx_index(index)
 
 
 @pytest.mark.parametrize(
-    "app", ["Splunk_TA_windows", "TA-parsewright-acme-vpn", "TA-parsewright-acme-vpn__test_../x"]
+    "app", ["Splunk_TA_windows", "TA-parsemaxxing-acme-vpn", "TA-parsemaxxing-acme-vpn__test_../x"]
 )
 def test_require_test_app_rejects_real_or_foreign_apps(app):
     with pytest.raises(ValueError):
@@ -105,7 +105,7 @@ def test_package_refuses_files_off_the_allowlist(tmp_path):
 
 def test_package_refuses_non_test_app(tmp_path):
     with pytest.raises(ValueError):
-        package.build(tmp_path, "TA-parsewright-acme-vpn", "0.0.1", {})
+        package.build(tmp_path, "TA-parsemaxxing-acme-vpn", "0.0.1", {})
 
 
 def test_packages_dir_must_be_private_real_dir(tmp_path):

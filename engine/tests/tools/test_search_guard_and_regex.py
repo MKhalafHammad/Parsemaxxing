@@ -2,15 +2,15 @@ import time
 
 import pytest
 
-from parsewright.tools.regex_test import test_regex as check_regex
-from parsewright.tools.search_guard import MAX_ROWS, SearchRefused, build_search
+from parsemaxxing.tools.regex_test import test_regex as check_regex
+from parsemaxxing.tools.search_guard import MAX_ROWS, SearchRefused, build_search
 
 ST = "acme:vpn__test_abcd1234_a1"
 
 
 def test_base_search_is_fixed_and_capped():
-    spl = build_search("pw_test", ST, "| stats count by user")
-    assert spl.startswith(f"search index=pw_test sourcetype={ST} | stats count by user")
+    spl = build_search("pmx_test", ST, "| stats count by user")
+    assert spl.startswith(f"search index=pmx_test sourcetype={ST} | stats count by user")
     assert spl.endswith(f"| head {MAX_ROWS}")
 
 
@@ -37,11 +37,11 @@ def test_base_search_is_fixed_and_capped():
 )
 def test_guard_refuses(pipeline):
     with pytest.raises((SearchRefused, ValueError)):
-        build_search("pw_test", ST, pipeline)
+        build_search("pmx_test", ST, pipeline)
 
 
 def test_pipe_inside_quotes_is_not_a_command():
-    spl = build_search("pw_test", ST, '| search msg="a | delete"')
+    spl = build_search("pmx_test", ST, '| search msg="a | delete"')
     assert '| search msg="a | delete" | head 50' in spl
 
 
@@ -49,7 +49,7 @@ def test_guard_rejects_bad_index_or_sourcetype():
     with pytest.raises(ValueError):
         build_search("main", ST)
     with pytest.raises(ValueError):
-        build_search("pw_test", "x OR index=main")
+        build_search("pmx_test", "x OR index=main")
 
 
 def test_regex_tool_reports_matches_and_groups():
@@ -80,7 +80,7 @@ def test_regex_tool_reports_invalid_patterns():
 )
 def test_guard_refuses_appsec_bypasses(pipeline):
     with pytest.raises(SearchRefused):
-        build_search("pw_test", ST, pipeline)
+        build_search("pmx_test", ST, pipeline)
 
 
 def test_regex_timeout_is_one_total_budget():

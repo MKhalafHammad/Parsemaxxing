@@ -37,11 +37,11 @@ async function forward(req: NextRequest, path: string[]): Promise<Response> {
     return NextResponse.json({ detail: "unknown host" }, { status: 421 });
   }
   if (req.method !== "GET") {
-    if (req.headers.get("x-parsewright") !== "1" || !allowedOrigin(req.headers.get("origin"))) {
+    if (req.headers.get("x-parsemaxxing") !== "1" || !allowedOrigin(req.headers.get("origin"))) {
       return NextResponse.json({ detail: "cross-site request refused" }, { status: 403 });
     }
   }
-  const headers: Record<string, string> = { "X-Parsewright": "1" };
+  const headers: Record<string, string> = { "X-Parsemaxxing": "1" };
   for (const h of ["content-type", "content-length", "last-event-id"]) {
     const v = req.headers.get(h);
     if (v) headers[h] = v;

@@ -1,7 +1,7 @@
 # engine
 
-The Parsewright backend: a Python 3.12 package (`parsewright`) holding the FastAPI app, the deterministic orchestrator, the Muse Spark agents, the guardrail gate, the TA builder and the Validator.
+The Parsemaxxing backend: a Python 3.12 package (`parsemaxxing`) holding the FastAPI app, the deterministic orchestrator, the Muse Spark agents, the guardrail gate, the TA builder and the Validator.
 
-Status: built. Each subfolder of `parsewright/` has a README describing what it holds; [docs/features.md](../docs/features.md) lists what is built and planned. See [docs/design.md](../docs/design.md) for the design and [CLAUDE.md](CLAUDE.md) for coding conventions.
+Status: built. Each subfolder of `parsemaxxing/` has a README describing what it holds; [docs/features.md](../docs/features.md) lists what is built and planned. See [docs/design.md](../docs/design.md) for the design and [CLAUDE.md](CLAUDE.md) for coding conventions.
 
 Install for development (from the repo root): `make setup`.

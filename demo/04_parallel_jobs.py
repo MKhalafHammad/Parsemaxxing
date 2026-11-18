@@ -11,8 +11,8 @@ from pathlib import Path
 
 import httpx
 
-API = os.environ.get("PARSEWRIGHT_API", "http://127.0.0.1:8080")
-FX = Path(__file__).resolve().parents[1] / "engine/parsewright/generator/fixtures"
+API = os.environ.get("PARSEMAXXING_API", "http://127.0.0.1:8080")
+FX = Path(__file__).resolve().parents[1] / "engine/parsemaxxing/generator/fixtures"
 UPLOADS = [
     ("acme_vpn.json", "acme", "vpn", {"auto_approve": "true"}),
     ("acme_fw.log", "acme", "fwdemo", {"auto_approve": "true"}),
@@ -24,7 +24,7 @@ DONE = {"awaiting_approval", "stage_failed", "error", "done", "rejected"}
 
 def main() -> int:
     # The API refuses state changes without this header (CSRF protection, threat T8.3).
-    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsewright": "1"})
+    c = httpx.Client(base_url=API, timeout=60, headers={"X-Parsemaxxing": "1"})
     jobs = []
     for name, vendor, product, extra in UPLOADS:
         files = {

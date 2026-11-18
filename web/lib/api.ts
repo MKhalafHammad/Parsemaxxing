@@ -1,6 +1,6 @@
 // Client-side calls go only to this app's own /api/engine proxy. Every call carries the
 // custom header the proxy and the engine require for state changes (CSRF, threat T8.3).
-export const CSRF_HEADER = "X-Parsewright";
+export const CSRF_HEADER = "X-Parsemaxxing";
 
 export type Job = {
   job: string;

@@ -16,16 +16,16 @@ What is built and what is planned. The README summarises this table.
 | Validator: extraction and CIM checks (Authentication, Network_Traffic, Web) with the three-number CIM score | **Built** |
 | Logs without a truth manifest: upload just the log. Generator samples are recognised and checked against their known answers; any other log is checked mechanically on every event (each time equal to the time written in its line, read by code; every value exactly as written in its line; CIM gaming rules), the run asks a human for the timezone only when the timestamps carry none, and the approval report lists the agents' decisions (timestamp reading, field meanings, value → CIM value with counts) | **Built** |
 | TA builder: escaping conf writer, test identity, reproducible `.tgz` packaging with a file allowlist and SHA-256 | **Built** |
-| Approval and promotion: `parsewright approve <job> --sha256 …` (hash-bound, replay-safe), `parsewright promote <job>` (deterministic rename to real names, both hashes linked, refuses existing TAs and sourcetypes, smoke test) | **Built** |
-| CLI: `parsewright run <file>` (all three stages) | **Built** |
+| Approval and promotion: `parsemaxxing approve <job> --sha256 …` (hash-bound, replay-safe), `parsemaxxing promote <job>` (deterministic rename to real names, both hashes linked, refuses existing TAs and sourcetypes, smoke test) | **Built** |
+| CLI: `parsemaxxing run <file>` (all three stages) | **Built** |
 | Web UI (Next.js): runs board with "Needs you" and a new-run sheet; run workspace with a clickable, deep-linkable phase rail, every attempt's proposal, gate verdict and Splunk checks, and a live activity feed showing which agent is acting; profile review; approval report (raw vs parsed with field colours and a CIM view, readable config and row diffs, approve/reject, `.tgz` download); TA registry | **Built** |
 | Parallel jobs: PostgreSQL queue (`FOR UPDATE SKIP LOCKED`, leases, heartbeats, crash resume), append-only ledger, worker pool with a global Splunk-write lock, LLM slots, daily token budget and kill switch | **Built** |
-| HTTP API: upload (content checks, duplicates), runs, profile review, approve/reject, `.tgz` download, live server-sent events; `parsewright serve` | **Built** (no login: localhost only, residual risk R1) |
+| HTTP API: upload (content checks, duplicates), runs, profile review, approve/reject, `.tgz` download, live server-sent events; `parsemaxxing serve` | **Built** (no login: localhost only, residual risk R1) |
 | Routing for shared syslog feeds | Future enhancement |
-| Parser updates: TA registry (versions, samples, baseline); `parsewright update <TA> <file>` or the upload form; Diagnose with no model call (0 tokens if the TA already parses the new format); only failing stages patched; every attempt checked on the old and the new samples; diff against production and `local/` override flags in the review; in-place promotion with a version bump that keeps `local/`; exact-version `parsewright rollback` | **Built** |
+| Parser updates: TA registry (versions, samples, baseline); `parsemaxxing update <TA> <file>` or the upload form; Diagnose with no model call (0 tokens if the TA already parses the new format); only failing stages patched; every attempt checked on the old and the new samples; diff against production and `local/` override flags in the review; in-place promotion with a version bump that keeps `local/`; exact-version `parsemaxxing rollback` | **Built** |
 | Drift monitoring with automatic update jobs | Future enhancement |
 | Drop folder intake (a watched folder, one job per subfolder) | Planned (the symlink-refusing intake helper is built) |
 | Correcting a mapping from the approval report, sent back to the owning stage as evidence | Planned |
 | Login with an approver role | Planned (localhost only today, residual risk R1) |
 | Secret scan and masking of uploaded samples | Planned (use synthetic logs or on-prem mode) |
-| A `pw_audit` index and dashboard for agent activity | Planned |
+| A `pmx_audit` index and dashboard for agent activity | Planned |

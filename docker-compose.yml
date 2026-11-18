@@ -1,9 +1,9 @@
-# Parsewright local stack. Every secret comes from .env (see .env.example).
+# Parsemaxxing local stack. Every secret comes from .env (see .env.example).
 # Published to the host (127.0.0.1 only): Splunk Web, the web UI, and PostgreSQL on 55432
 # (for the CLI on the host; 5432 is often Splunk 10's own internal PostgreSQL, and 543x ports
 # are often taken by other local services).
 # Internal only: Splunk management port 8089.
-name: parsewright
+name: parsemaxxing
 
 services:
   splunk:
@@ -19,9 +19,9 @@ services:
       - splunk-etc:/opt/splunk/etc
       - splunk-var:/opt/splunk/var
       # The engine's add-on packages, read-only for Splunk (Q6, T5.9).
-      - packages:/opt/parsewright/packages:ro
+      - packages:/opt/parsemaxxing/packages:ro
       # Licensed add-ons that cannot be committed (the CIM add-on), read-only (lab/README.md).
-      - ./lab:/opt/parsewright/lab:ro,z
+      - ./lab:/opt/parsemaxxing/lab:ro,z
     restart: unless-stopped
 
   postgres:
@@ -45,10 +45,10 @@ services:
     restart: unless-stopped
 
   # One-shot: migrations and the app role's password. The only service with the database
-  # owner's credentials; the engine itself connects as the limited parsewright_app role.
+  # owner's credentials; the engine itself connects as the limited parsemaxxing_app role.
   migrate:
     build: ./engine
-    command: ["parsewright", "--env-file", "/dev/null", "migrate"]
+    command: ["parsemaxxing", "--env-file", "/dev/null", "migrate"]
     environment:
       MIGRATE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}
@@ -68,12 +68,12 @@ services:
     ports:
       - "127.0.0.1:${ENGINE_PORT:-8080}:8080"
     volumes:
-      - packages:/opt/parsewright/packages
+      - packages:/opt/parsemaxxing/packages
       - runs:/app/.runs
     environment:
-      DATABASE_URL: postgresql://parsewright_app:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB}
-      PARSEWRIGHT_TEST_INDEX: ${PARSEWRIGHT_TEST_INDEX:-pw_test}
-      PARSEWRIGHT_RUN_TOKEN_CEILING: ${PARSEWRIGHT_RUN_TOKEN_CEILING:-300000}
+      DATABASE_URL: postgresql://parsemaxxing_app:${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD in .env}@postgres:5432/${POSTGRES_DB}
+      PARSEMAXXING_TEST_INDEX: ${PARSEMAXXING_TEST_INDEX:-pmx_test}
+      PARSEMAXXING_RUN_TOKEN_CEILING: ${PARSEMAXXING_RUN_TOKEN_CEILING:-300000}
       ALLOWED_HOSTS: localhost,127.0.0.1,engine
       WEB_ORIGIN: http://localhost:${WEB_PORT:-3000}
       SPLUNK_HOST: splunk

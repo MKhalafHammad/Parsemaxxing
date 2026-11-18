@@ -5,7 +5,7 @@
 # three run straight through while the fourth (no auto-approve) pauses for profile review and
 # frees its worker; the script then confirms that profile and the job resumes.
 # Prerequisites: PostgreSQL (docker compose up -d postgres), lab Splunk, .env filled in, and the
-# API with workers running in another terminal:  .venv/bin/parsewright serve --workers 4
+# API with workers running in another terminal:  .venv/bin/parsemaxxing serve --workers 4
 # Takes several minutes and roughly 250-400k tokens in total.
 set -euo pipefail
 cd "$(dirname "$0")/.."

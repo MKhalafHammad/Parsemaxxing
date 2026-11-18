@@ -1,4 +1,4 @@
-from parsewright.orchestrator.report import highlights
+from parsemaxxing.orchestrator.report import highlights
 
 
 def test_highlights_are_offsets_into_the_raw_line():

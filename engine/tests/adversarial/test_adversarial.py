@@ -20,23 +20,23 @@ from conftest import (
     vpn_events,
 )
 
-from parsewright.agents.cim_mapper import CimProposal, Eval, EventType
-from parsewright.agents.llm import as_data
-from parsewright.guardrails import conf_gate
-from parsewright.guardrails.index_time import GuardrailBlock, gate
-from parsewright.guardrails.search_time import cim
-from parsewright.orchestrator import promote
-from parsewright.orchestrator.caps import IngestCapExceeded, IngestCaps
-from parsewright.orchestrator.run import run
-from parsewright.ta_builder import package
-from parsewright.ta_builder.conf_writer import ConfValueError, write_conf
-from parsewright.ta_builder.naming import require_pw_index, ta_name
-from parsewright.tools.search_guard import SearchRefused, build_search
-from parsewright.tools.splunk_client import SplunkClient
+from parsemaxxing.agents.cim_mapper import CimProposal, Eval, EventType
+from parsemaxxing.agents.llm import as_data
+from parsemaxxing.guardrails import conf_gate
+from parsemaxxing.guardrails.index_time import GuardrailBlock, gate
+from parsemaxxing.guardrails.search_time import cim
+from parsemaxxing.orchestrator import promote
+from parsemaxxing.orchestrator.caps import IngestCapExceeded, IngestCaps
+from parsemaxxing.orchestrator.run import run
+from parsemaxxing.ta_builder import package
+from parsemaxxing.ta_builder.conf_writer import ConfValueError, write_conf
+from parsemaxxing.ta_builder.naming import require_pmx_index, ta_name
+from parsemaxxing.tools.search_guard import SearchRefused, build_search
+from parsemaxxing.tools.splunk_client import SplunkClient
 
 JOB = "abcd1234"
 ST = f"acme:vpn__test_{JOB}_a1"
-APP = f"TA-parsewright-acme-vpn__test_{JOB}"
+APP = f"TA-parsemaxxing-acme-vpn__test_{JOB}"
 
 
 def confs(props=None, transforms=None, eventtypes=None, tags=None):
@@ -53,7 +53,7 @@ def confs(props=None, transforms=None, eventtypes=None, tags=None):
 @pytest.mark.parametrize(
     "props",
     [
-        {"TRANSFORMS-drop": f"parsewright_{JOB}_x"},  # nullQueue route
+        {"TRANSFORMS-drop": f"parsemaxxing_{JOB}_x"},  # nullQueue route
         {"SEDCMD-clean": "s/.*//g"},
         {"INGEST_EVAL": '_raw=""'},
         {"DEST_KEY": "queue"},
@@ -87,7 +87,7 @@ def test_report_cannot_chain_into_a_foreign_or_metadata_transform():
     # REPORT- to another app's transform, or a transform that writes metadata/queues.
     with pytest.raises(GuardrailBlock, match="outside this job"):
         conf_gate.check(confs({"REPORT-x": "someone_elses_transform"}), JOB, ST)
-    own = f"parsewright_{JOB}_t"
+    own = f"parsemaxxing_{JOB}_t"
     for key, value in (
         ("DEST_KEY", "queue"),
         ("FORMAT", "nullQueue"),
@@ -100,7 +100,7 @@ def test_report_cannot_chain_into_a_foreign_or_metadata_transform():
 
 
 def test_eventtypes_and_tags_stay_inside_the_job():
-    name = f"parsewright_{JOB}_auth"
+    name = f"parsemaxxing_{JOB}_auth"
     ok = confs(
         eventtypes={name: {"search": f"sourcetype={ST} (type=auth)"}},
         tags={f"eventtype={name}": {"authentication": "enabled"}},
@@ -213,18 +213,18 @@ def test_cim_value_must_trace_to_a_source_field():
         cim(p, ST, JOB, {"result", "user_name"})
 
 
-# --- T5.1: ingest target outside pw_ ----------------------------------------------------------
+# --- T5.1: ingest target outside pmx_ ----------------------------------------------------------
 
 
-@pytest.mark.parametrize("index", ["main", "_internal", "pw", "pw_x OR index=main", "summary"])
-def test_ingest_outside_pw_is_refused(index, tmp_path):
+@pytest.mark.parametrize("index", ["main", "_internal", "pw", "pmx_x OR index=main", "summary"])
+def test_ingest_outside_pmx_is_refused(index, tmp_path):
     from conftest import settings
 
     client = SplunkClient(settings(tmp_path), search=object(), deploy=object())
     with pytest.raises(ValueError):
         client.ingest(index, ST, "x", "src")
     with pytest.raises(ValueError):
-        require_pw_index(index)
+        require_pmx_index(index)
 
 
 # --- T1.2: forbidden search commands ----------------------------------------------------------
@@ -243,7 +243,7 @@ def test_ingest_outside_pw_is_refused(index, tmp_path):
 )
 def test_forbidden_search_commands(pipeline):
     with pytest.raises(SearchRefused):
-        build_search("pw_test", ST, pipeline)
+        build_search("pmx_test", ST, pipeline)
 
 
 # --- T5.2: ingest byte caps -----------------------------------------------------------------
@@ -268,7 +268,7 @@ def awaiting(tmp_path):
     pkgs = tmp_path / "packages"
     pkgs.mkdir(mode=0o755)
     runs = tmp_path / "runs"
-    name = f"parsewright_{JOB}_auth"
+    name = f"parsemaxxing_{JOB}_auth"
     pkg = package.build(
         pkgs,
         APP,
@@ -317,23 +317,23 @@ def test_one_changed_byte_after_approval_blocks_promotion(awaiting):
     data[-1] ^= 0x01
     kept.write_bytes(bytes(data))
     with pytest.raises(promote.TransitionRefused, match="changed after approval"):
-        promote.promote(runs, JOB, FakeSplunk([]), pkgs, "pw_test", out=lambda _: None)
+        promote.promote(runs, JOB, FakeSplunk([]), pkgs, "pmx_test", out=lambda _: None)
     assert promote.load(runs, JOB)["status"] == promote.APPROVED  # nothing was installed
 
 
 def test_promotion_without_approval_is_refused(awaiting):
     runs, pkgs, _ = awaiting
     with pytest.raises(promote.TransitionRefused, match="not approved"):
-        promote.promote(runs, JOB, FakeSplunk([]), pkgs, "pw_test", out=lambda _: None)
+        promote.promote(runs, JOB, FakeSplunk([]), pkgs, "pmx_test", out=lambda _: None)
 
 
 def test_existing_ta_name_is_never_overwritten(awaiting):
     runs, pkgs, record = awaiting
     promote.approve(runs, JOB, record["sha256_test"])
     splunk = FakeSplunk([])
-    splunk.existing_apps = {"TA-parsewright-acme-vpn"}
+    splunk.existing_apps = {"TA-parsemaxxing-acme-vpn"}
     with pytest.raises(promote.TransitionRefused, match="installed in Splunk"):
-        promote.promote(runs, JOB, splunk, pkgs, "pw_test", out=lambda _: None)
+        promote.promote(runs, JOB, splunk, pkgs, "pmx_test", out=lambda _: None)
     assert splunk.installed == []
 
 
@@ -361,7 +361,7 @@ def test_blocked_proposal_is_never_deployed(tmp_path, manifest):
         work / "acme_vpn.json",
         llm,
         splunk,
-        "pw_test",
+        "pmx_test",
         pkgs,
         out=lines.append,
         stages=("index-time",),
@@ -379,10 +379,10 @@ def test_promotion_succeeds_with_real_names_both_hashes_and_smoke(awaiting):
     promote.approve(runs, JOB, record["sha256_test"])
     splunk = FakeSplunk([])
     got, out = collect_events()
-    done = promote.promote(runs, JOB, splunk, pkgs, "pw_test", out=out)
+    done = promote.promote(runs, JOB, splunk, pkgs, "pmx_test", out=out)
     assert done["status"] == promote.DONE and done["smoke"].startswith("PASS")
     (line, installed), (_, smoke) = got
-    assert line.startswith("installed TA-parsewright-acme-vpn 1.0.0 (sha256 ")
+    assert line.startswith("installed TA-parsemaxxing-acme-vpn 1.0.0 (sha256 ")
     assert "\n  derived from approved test package " in line
     assert (installed["stage"], installed["actor"], installed["kind"]) == (
         "promotion",
@@ -390,7 +390,7 @@ def test_promotion_succeeds_with_real_names_both_hashes_and_smoke(awaiting):
         "deploy",
     )
     assert installed["detail"] == {
-        "app": "TA-parsewright-acme-vpn",
+        "app": "TA-parsemaxxing-acme-vpn",
         "version": "1.0.0",
         "sha256": done["sha256_promoted"],
         "from_sha256": done["sha256_test"],
@@ -400,7 +400,7 @@ def test_promotion_succeeds_with_real_names_both_hashes_and_smoke(awaiting):
     promoted = (runs / JOB / "promoted.tgz").read_bytes()
     assert hashlib.sha256(promoted).hexdigest() == done["sha256_promoted"]
     installed = splunk.installed[-1]
-    assert installed.app == "TA-parsewright-acme-vpn"
+    assert installed.app == "TA-parsemaxxing-acme-vpn"
     files = promote.renamed_files((runs / JOB / "test.tgz").read_bytes(), record)
     assert "sourcetype=acme:vpn (type=auth)" in files["default/eventtypes.conf"]
     assert [e["event"] for e in done["events"]] == [
@@ -422,7 +422,7 @@ def test_default_or_non_sourcetype_stanzas_never_promote(sourcetype):
     # H1: a model-chosen sourcetype "default" would become [default] at promotion.
     with pytest.raises((GuardrailBlock, ValueError)):
         conf_gate.check({"props": {sourcetype: {"TZ": "UTC"}}}, JOB, sourcetype)
-    from parsewright.ta_builder.naming import test_sourcetype
+    from parsemaxxing.ta_builder.naming import test_sourcetype
 
     with pytest.raises(ValueError):
         test_sourcetype(sourcetype.lower(), JOB, 1)
@@ -435,16 +435,16 @@ def test_promotion_refuses_an_existing_sourcetype(awaiting):
     splunk = FakeSplunk([])
     splunk.existing_props = {"acme:vpn"}
     with pytest.raises(promote.TransitionRefused, match="already has settings"):
-        promote.promote(runs, JOB, splunk, pkgs, "pw_test", out=lambda _: None)
+        promote.promote(runs, JOB, splunk, pkgs, "pmx_test", out=lambda _: None)
     assert splunk.installed == []
 
 
 @pytest.mark.parametrize(
     "expr",
     [
-        'if(match(index,"^pw_"), if(result=="ok","success","failure"), "success")',
+        'if(match(index,"^pmx_"), if(result=="ok","success","failure"), "success")',
         'if(like(sourcetype,"%__test_%"), result, "success")',
-        'if(host=="parsewright-sample", result, "success")',
+        'if(host=="parsemaxxing-sample", result, "success")',
         'if(now()>1893456000, "success", result)',
         'if(_indextime>0, result, "success")',
         'if(random()>0, result, "x")',
@@ -465,7 +465,7 @@ def test_eval_cannot_detect_the_test_environment(expr):
 
 
 @pytest.mark.parametrize(
-    "flt", ['type="auth" sourcetype IN ("*__test_*")', 'index IN ("pw_*")', "host=x", "source=y"]
+    "flt", ['type="auth" sourcetype IN ("*__test_*")', 'index IN ("pmx_*")', "host=x", "source=y"]
 )
 def test_eventtype_filter_cannot_name_environment_fields(flt):
     # M4: IN instead of = to match only in the test.
@@ -499,7 +499,7 @@ def test_final_gate_rechecks_values(props):
 
 def test_final_gate_anchor_is_the_whole_search():
     # M5c: a prefix check alone let "sourcetype=X (x=1) OR index=main" through.
-    name = f"parsewright_{JOB}_e"
+    name = f"parsemaxxing_{JOB}_e"
     for search in (
         f"sourcetype={ST} (x=1) OR index=main",
         f"sourcetype={ST} (x=1) OR (y=2)",
@@ -510,7 +510,7 @@ def test_final_gate_anchor_is_the_whole_search():
 
 
 def test_final_gate_transform_keys_are_only_what_stages_generate():
-    own = f"parsewright_{JOB}_t"
+    own = f"parsemaxxing_{JOB}_t"
     with pytest.raises(GuardrailBlock):
         conf_gate.check(
             confs({"REPORT-x": own}, {own: {"REGEX": "(.*)", "FORMAT": "a::$1"}}), JOB, ST
@@ -518,23 +518,23 @@ def test_final_gate_transform_keys_are_only_what_stages_generate():
 
 
 def test_transform_collision_stops_the_deploy(tmp_path, manifest):
-    from parsewright.orchestrator.run import Run
+    from parsemaxxing.orchestrator.run import Run
 
     pkgs = tmp_path / "packages"
     pkgs.mkdir(mode=0o755)
     splunk = FakeSplunk([])
-    splunk.existing_transforms = {f"parsewright_{JOB}_delims"}
+    splunk.existing_transforms = {f"parsemaxxing_{JOB}_delims"}
     work = tmp_path / "in"
     work.mkdir()
     for n in ("acme_vpn.json", "acme_vpn.manifest.json"):
         shutil.copy(FIXTURES / n, work / n)
     r = Run(
-        work / "acme_vpn.json", None, splunk, "pw_test", pkgs, print, 1, IngestCaps(None, 20, 500)
+        work / "acme_vpn.json", None, splunk, "pmx_test", pkgs, print, 1, IngestCaps(None, 20, 500)
     )
     r.job, r.app = JOB, APP
     ext = {
-        "props": {"REPORT-parsewright_delims": f"parsewright_{JOB}_delims"},
-        "transforms": {f"parsewright_{JOB}_delims": {"DELIMS": '","', "FIELDS": '"a"'}},
+        "props": {"REPORT-parsemaxxing_delims": f"parsemaxxing_{JOB}_delims"},
+        "transforms": {f"parsemaxxing_{JOB}_delims": {"DELIMS": '","', "FIELDS": '"a"'}},
     }
     with pytest.raises(GuardrailBlock, match="already exist"):
         r.deploy(ST, {"SHOULD_LINEMERGE": "false"}, ext, {})
@@ -556,7 +556,7 @@ def test_forged_record_names_are_rechecked(awaiting):
     forged = json.loads(path.read_text()) | {"sourcetype": "default"}
     path.write_text(json.dumps(forged))
     with pytest.raises(ValueError, match="reserved"):
-        promote.promote(runs, JOB, FakeSplunk([]), pkgs, "pw_test", out=lambda _: None)
+        promote.promote(runs, JOB, FakeSplunk([]), pkgs, "pmx_test", out=lambda _: None)
 
 
 def test_smoke_reads_its_own_copy_not_a_path_from_the_record(awaiting):

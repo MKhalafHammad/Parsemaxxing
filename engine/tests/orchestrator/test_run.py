@@ -3,8 +3,8 @@ import shutil
 import pytest
 from conftest import FIXTURES, PROFILE, FakeSplunk, collect_events, fake_llm, proposal, vpn_events
 
-from parsewright.agents.llm import TokenCeilingExceeded
-from parsewright.orchestrator.run import Run, run
+from parsemaxxing.agents.llm import TokenCeilingExceeded
+from parsemaxxing.orchestrator.run import Run, run
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def truth(manifest, shift=0):
 def go(sample, pkgs, llm, splunk, **kw):
     lines: list[str] = []
     kw.setdefault("stages", ("index-time",))
-    result = run(sample, llm, splunk, "pw_test", pkgs, out=lines.append, **kw)
+    result = run(sample, llm, splunk, "pmx_test", pkgs, out=lines.append, **kw)
     return result, "\n".join(lines)
 
 
@@ -40,8 +40,8 @@ def test_pass_on_first_attempt(sample, pkgs, tmp_path, manifest):
     assert result.status == "passed" and result.attempts == 1
     assert "index-time: PASS (event count 300/300, attempt 1)" in log
     app = splunk.installed[0].app
-    assert app.startswith("TA-parsewright-acme-vpn_gateway__test_")
-    assert splunk.ingested == [("pw_test", result.sourcetype)]
+    assert app.startswith("TA-parsemaxxing-acme-vpn_gateway__test_")
+    assert splunk.ingested == [("pmx_test", result.sourcetype)]
     assert result.sourcetype.startswith("acme:vpn__test_") and result.sourcetype.endswith("_a1")
     assert splunk.uninstalled == [app] and not list(pkgs.iterdir())  # cleaned up
 
@@ -108,7 +108,7 @@ def test_every_log_line_carries_its_stage_attempt_actor_and_kind(sample, pkgs, t
         sample,
         fake_llm(tmp_path, replies),
         splunk,
-        "pw_test",
+        "pmx_test",
         pkgs,
         out=out,
         stages=("index-time",),
@@ -176,7 +176,7 @@ def test_every_log_line_carries_its_stage_attempt_actor_and_kind(sample, pkgs, t
         sample,
         fake_llm(tmp_path, replies2),
         FakeSplunk([truth(manifest, shift=-32400), truth(manifest)]),
-        "pw_test",
+        "pmx_test",
         pkgs,
         out=lines.append,
         stages=("index-time",),
@@ -200,7 +200,9 @@ def test_backtrack_events_name_both_stages_and_the_second_visit(
     splunk = FakeSplunk([truth(manifest), truth(manifest)])
     got, out = collect_events()
     llm = fake_llm(tmp_path, [PROFILE, proposal(), proposal()])
-    result = run(sample, llm, splunk, "pw_test", pkgs, out=out, stages=("index-time", "extraction"))
+    result = run(
+        sample, llm, splunk, "pmx_test", pkgs, out=out, stages=("index-time", "extraction")
+    )
     assert result.status == "stage_failed" and result.backtracked
     (back,) = [m for _, m in got if m["kind"] == "backtrack"]
     assert (back["stage"], back["attempt"], back["visit"]) == ("index-time", None, 2)
@@ -226,7 +228,13 @@ def test_backtrack_events_name_both_stages_and_the_second_visit(
 def test_profile_review_waits_for_a_human(sample, pkgs, tmp_path):
     got, out = collect_events()
     run(
-        sample, fake_llm(tmp_path, [PROFILE]), FakeSplunk([]), "pw_test", pkgs, out=out, review=True
+        sample,
+        fake_llm(tmp_path, [PROFILE]),
+        FakeSplunk([]),
+        "pmx_test",
+        pkgs,
+        out=out,
+        review=True,
     )
     line, m = got[-1]
     assert line == "profile review: waiting for a human"
@@ -269,7 +277,7 @@ def test_a_log_without_a_zone_waits_for_a_human_even_when_review_is_skipped(
     got, out = collect_events()
     splunk = FakeSplunk([])
     llm = fake_llm(tmp_path, [NOTZ])
-    result = run(no_manifest, llm, splunk, "pw_test", pkgs, out=out, stages=("index-time",))
+    result = run(no_manifest, llm, splunk, "pmx_test", pkgs, out=out, stages=("index-time",))
     assert result.status == "profile_review" and not splunk.installed
     line, m = got[-1]
     assert "carry no timezone" in line and m["detail"]["reason"] == "timezone"
@@ -281,7 +289,7 @@ def test_epoch_or_offset_timestamps_need_no_timezone_whatever_the_profile_says(
 ):
     """Code reads the example: an epoch is UTC by definition (the lab's Profiler said "no zone"
     for 1792483254000 and the run paused for nothing)."""
-    from parsewright.validator.mechanical import example_has_zone
+    from parsemaxxing.validator.mechanical import example_has_zone
 
     text = (
         'ts=1792483254000 a=1\n{"time":"2026-10-20T08:00:46+00:00"}\n{"time":"2026-10-20 17:00:45"}'
@@ -331,8 +339,8 @@ def test_a_generator_sample_keeps_its_answer_key(sample, pkgs, tmp_path, manifes
 def test_value_pairs_match_events_across_the_cim_layer(sample, pkgs, tmp_path):
     """action=accept becomes action=allowed under the same name; and an EVAL reading two
     fields shows each event's own source value (lab: logins use result, sessions verdict)."""
-    from parsewright.orchestrator.caps import IngestCaps
-    from parsewright.validator.mechanical import RAW
+    from parsemaxxing.orchestrator.caps import IngestCaps
+    from parsemaxxing.validator.mechanical import RAW
 
     class Rows(FakeSplunk):
         def field_rows(self, index, sourcetype, source=None):
@@ -346,7 +354,7 @@ def test_value_pairs_match_events_across_the_cim_layer(sample, pkgs, tmp_path):
         sample,
         fake_llm(tmp_path, []),
         Rows([]),
-        "pw_test",
+        "pmx_test",
         pkgs,
         print,
         5,
@@ -367,14 +375,14 @@ def test_source_variety_is_read_before_the_cim_layer(sample, pkgs, tmp_path):
     """appsec H1: EVAL-action = case(action=="accept","allowed",true(),"allowed") rewrites
     its own source, so variety must come from the pre-CIM snapshot; an enumerated field is
     judged even when its EVAL reads two fields."""
-    from parsewright.agents.profiler import LogProfile
-    from parsewright.orchestrator.caps import IngestCaps
+    from parsemaxxing.agents.profiler import LogProfile
+    from parsemaxxing.orchestrator.caps import IngestCaps
 
     r = Run(
         sample,
         fake_llm(tmp_path, []),
         FakeSplunk([]),
-        "pw_test",
+        "pmx_test",
         pkgs,
         print,
         5,

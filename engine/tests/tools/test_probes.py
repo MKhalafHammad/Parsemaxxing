@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import openai
 import pytest
 
-from parsewright.tools.probes.probe_llm import probe, redact
-from parsewright.tools.probes.probe_splunk import require_pw_index, token_shape
+from parsemaxxing.tools.probes.probe_llm import probe, redact
+from parsemaxxing.tools.probes.probe_splunk import require_pmx_index, token_shape
 
 USAGE = SimpleNamespace(prompt_tokens=10, completion_tokens=3)
 
@@ -78,22 +78,22 @@ def test_failure_output_redacts_api_key(monkeypatch, capsys):
     [
         "main",
         "pw",
-        "pw_",
-        "pw_*",
-        "pw_x | delete",
-        "pw_x OR index=main",
+        "pmx_",
+        "pmx_*",
+        "pmx_x | delete",
+        "pmx_x OR index=main",
         "_internal",
         "PW_x",
         "xpw_probe",
     ],
 )
-def test_rejects_non_pw_index(index):
+def test_rejects_non_pmx_index(index):
     with pytest.raises(ValueError):
-        require_pw_index(index)
+        require_pmx_index(index)
 
 
-def test_accepts_pw_index():
-    assert require_pw_index("pw_probe") == "pw_probe"
+def test_accepts_pmx_index():
+    assert require_pmx_index("pmx_probe") == "pmx_probe"
 
 
 def fake_jwt(claims: dict, signature: str = "c2VjcmV0LXNpZ25hdHVyZQ") -> str:
@@ -104,9 +104,9 @@ def fake_jwt(claims: dict, signature: str = "c2VjcmV0LXNpZ25hdHVyZQ") -> str:
 
 
 def test_token_shape_reports_user_and_expiry_but_not_the_token():
-    token = fake_jwt({"sub": "parsewright_deploy", "exp": int(time.time()) + 7200})
+    token = fake_jwt({"sub": "parsemaxxing_deploy", "exp": int(time.time()) + 7200})
     shape = token_shape(token)
-    assert "user=parsewright_deploy" in shape
+    assert "user=parsemaxxing_deploy" in shape
     assert "expires in 1h" in shape or "expires in 2h" in shape
     assert token not in shape
     assert "c2VjcmV0LXNpZ25hdHVyZQ" not in shape

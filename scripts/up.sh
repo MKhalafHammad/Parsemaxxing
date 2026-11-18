@@ -36,6 +36,7 @@ wait_healthy() { # service, seconds
 }
 
 python3 scripts/init_env.py
+DOCKER="$DOCKER" scripts/migrate_v1_volumes.sh # v1 (parsewright_*) volumes; no-op otherwise
 
 echo "starting Splunk and PostgreSQL (Splunk's first start takes a few minutes)"
 compose up -d splunk postgres
@@ -43,10 +44,10 @@ wait_healthy postgres 120
 wait_healthy splunk 900
 
 echo "preparing Splunk"
-TEST_INDEX=$(grep -E '^PARSEWRIGHT_TEST_INDEX=' .env | cut -d= -f2- || true)
+TEST_INDEX=$(grep -E '^PARSEMAXXING_TEST_INDEX=' .env | cut -d= -f2- || true)
 # The script reaches splunkd on the container's loopback; its stdout is the tokens, which go
 # straight into .env and never to the terminal.
-tokens=$(compose exec -T -e PW_TEST_INDEX="${TEST_INDEX:-pw_test}" splunk \
+tokens=$(compose exec -T -e PMX_TEST_INDEX="${TEST_INDEX:-pmx_test}" splunk \
   sh -c 'if command -v python3 >/dev/null; then exec python3 -; else exec /opt/splunk/bin/splunk cmd python3 -; fi' \
   < scripts/splunk_bootstrap.py)
 printf '%s\n' "$tokens" | python3 scripts/env_set.py
@@ -61,7 +62,7 @@ WEB_PORT=$(grep -E '^WEB_PORT=' .env | cut -d= -f2- || true)
 SPLUNK_WEB_PORT=$(grep -E '^SPLUNK_WEB_PORT=' .env | cut -d= -f2- || true)
 cat <<EOF
 
-Parsewright is up.
+Parsemaxxing is up.
   UI:          http://localhost:${WEB_PORT:-3000}
   Splunk Web:  http://localhost:${SPLUNK_WEB_PORT:-8000}  (user admin, password SPLUNK_PASSWORD in .env)
 First run:     make first-run

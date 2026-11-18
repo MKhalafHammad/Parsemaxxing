@@ -67,3 +67,6 @@ Thumbs.db
 # Synthetic fixtures are the one exception: their logs and .tgz are committed.
 !**/generator/fixtures/**
 .runs/
+
+# --- Local backups (scripts/migrate_v1_volumes.sh) ---
+backups/

@@ -15,12 +15,12 @@ import tarfile
 import pytest
 from conftest import FIXTURES, FakeSplunk, collect_events, fake_llm
 
-from parsewright.agents.profiler import LogProfile
-from parsewright.guardrails import conf_gate
-from parsewright.guardrails.index_time import GuardrailBlock
-from parsewright.orchestrator import promote, update
-from parsewright.orchestrator.run import SampleSet, load_manifest
-from parsewright.orchestrator.update import (
+from parsemaxxing.agents.profiler import LogProfile
+from parsemaxxing.guardrails import conf_gate
+from parsemaxxing.guardrails.index_time import GuardrailBlock
+from parsemaxxing.orchestrator import promote, update
+from parsemaxxing.orchestrator.run import SampleSet, load_manifest
+from parsemaxxing.orchestrator.update import (
     Production,
     UpdateRun,
     anchor,
@@ -31,13 +31,13 @@ from parsewright.orchestrator.update import (
     run_update,
     split_stages,
 )
-from parsewright.ta_builder import package
-from parsewright.tools import splunk_client
-from parsewright.tools.splunk_client import SplunkClient, SplunkError
-from parsewright.validator.index_time import Check, Report
+from parsemaxxing.ta_builder import package
+from parsemaxxing.tools import splunk_client
+from parsemaxxing.tools.splunk_client import SplunkClient, SplunkError
+from parsemaxxing.validator.index_time import Check, Report
 
 OWNER, JOB = "own00001", "upd00001"
-APP, ST = "TA-parsewright-acme-firewall", "acme:fw"
+APP, ST = "TA-parsemaxxing-acme-firewall", "acme:fw"
 PROD_PROPS = {
     "SHOULD_LINEMERGE": "false",
     "LINE_BREAKER": "([\\r\\n]+)",
@@ -49,9 +49,9 @@ PROD_PROPS = {
 }
 PROD_CONFS = {
     "props": {ST: PROD_PROPS},
-    "eventtypes": {f"parsewright_{OWNER}_traffic": {"search": f"sourcetype={ST}"}},
+    "eventtypes": {f"parsemaxxing_{OWNER}_traffic": {"search": f"sourcetype={ST}"}},
     "tags": {
-        f"eventtype=parsewright_{OWNER}_traffic": {"network": "enabled", "communicate": "enabled"}
+        f"eventtype=parsemaxxing_{OWNER}_traffic": {"network": "enabled", "communicate": "enabled"}
     },
 }
 FW_PROFILE = {
@@ -145,7 +145,7 @@ def prod(tmp_path, pkgs) -> Production:
         path.read_text(),
         manifest,
         profile_for(LogProfile(**FW_PROFILE), manifest),
-        "parsewright_old_1",
+        "parsemaxxing_old_1",
     )
     return Production(APP, ST, "acme", "firewall", OWNER, "1.0.0", files, [old])
 
@@ -167,7 +167,7 @@ def go(tmp_path, pkgs, prod, splunk, replies, out=None, **kw):
         prod,
         llm,
         splunk,
-        "pw_test",
+        "pmx_test",
         pkgs,
         JOB,
         out=out or lines.append,
@@ -194,7 +194,7 @@ def test_new_samples_that_pass_as_is_end_at_diagnose_with_zero_tokens(
     assert llm._client.requests == [] and not recorded
     assert "already parses the new samples; no change" in log
     # both sample sets went into one test sourcetype, told apart by source
-    assert {src for *_, src in splunk.ingested} == {"parsewright_old_1", "parsewright_new"}
+    assert {src for *_, src in splunk.ingested} == {"parsemaxxing_old_1", "parsemaxxing_new"}
     assert all(i.app.endswith(f"__test_{JOB}") for i in splunk.installed)
     assert splunk.uninstalled[-1] == f"{APP}__test_{JOB}" and not list(pkgs.iterdir())
 
@@ -235,7 +235,7 @@ def test_a_patch_that_breaks_the_old_format_is_rejected_with_evidence(
     review = recorded["report"]["update"]
     assert "-TIME_FORMAT = %s%3N" in review["diff"]["default/props.conf"]
     assert "+version = 1.1.0" in review["diff"]["default/app.conf"]
-    assert review["rollback"] == f"parsewright rollback {APP} 1.0.0"
+    assert review["rollback"] == f"parsemaxxing rollback {APP} 1.0.0"
     assert any("Index-time settings changed" in n for n in review["notes"])
     # the same diff as rows, for the UI (one per setting, unchanged ones included)
     rows = {(r["file"], r["stanza"], r["key"]): r for r in review["changes"]}
@@ -253,7 +253,7 @@ def test_a_patch_that_breaks_the_old_format_is_rejected_with_evidence(
     version = rows[("app.conf", "launcher", "version")]
     assert (version["before"], version["after"], version["change"]) == ("1.0.0", "1.1.0", "changed")
     assert rows[("app.conf", "ui", "label")]["change"] == "unchanged"
-    tag = rows[("tags.conf", f"eventtype=parsewright_{OWNER}_traffic", "network")]
+    tag = rows[("tags.conf", f"eventtype=parsemaxxing_{OWNER}_traffic", "network")]
     assert tag["change"] == "unchanged"  # renamed back to the TA's own names before the diff
 
 
@@ -286,7 +286,7 @@ def test_update_log_events_are_structured(tmp_path, pkgs, prod, monkeypatch):
     first = got[0][1]["detail"]
     assert first["job_type"] == "update" and first["app"] == APP and first["version"] == "1.0.0"
     sets = got[3][1]["detail"]["sets"]
-    assert [s["source"] for s in sets] == ["parsewright_old_1", "parsewright_new"]
+    assert [s["source"] for s in sets] == ["parsemaxxing_old_1", "parsemaxxing_new"]
     assert got[3][0].endswith("from 2 sample sets")
     diagnosed = [m for _, m in got if m["stage"] == "diagnose" and m["actor"] == "validator"]
     by_set = {m["detail"]["sample_set"]: m for m in diagnosed if "sample_set" in m["detail"]}
@@ -334,7 +334,7 @@ def test_conf_changes_rows_cover_every_setting_of_every_conf_file():
     new = {
         "default/props.conf": "[acme:fw]\nKV_MODE = auto\nEVAL-src = coalesce(src_ip, src)\n",
         "default/app.conf": "[launcher]\nversion = 1.1.0\n",
-        "default/transforms.conf": "[parsewright_x_kv]\nREGEX = (\\w+)=(\\w+)\n",
+        "default/transforms.conf": "[parsemaxxing_x_kv]\nREGEX = (\\w+)=(\\w+)\n",
         "metadata/default.meta": "[]\nexport = none\n",
     }
     rows = conf_changes(old, new)
@@ -380,8 +380,8 @@ def test_production_settings_move_to_the_test_identity_and_back(prod, pkgs):
     stages = split_stages(prod.confs, ST, OWNER, JOB)
     st = f"{ST}__test_{JOB}_a2"
     cim = anchor(stages["cim"], st)
-    assert list(cim["eventtypes"]) == [f"parsewright_{JOB}_traffic"]
-    assert cim["eventtypes"][f"parsewright_{JOB}_traffic"]["search"] == f"sourcetype={st}"
+    assert list(cim["eventtypes"]) == [f"parsemaxxing_{JOB}_traffic"]
+    assert cim["eventtypes"][f"parsemaxxing_{JOB}_traffic"]["search"] == f"sourcetype={st}"
     confs = {
         "props": {st: {**stages["index"], **stages["extraction"]["props"], **cim["props"]}},
         "eventtypes": cim["eventtypes"],
@@ -487,10 +487,10 @@ def client(tmp_path):
     [
         (None, "not installed"),
         ({"version": "1.1.0", "description": package.DESCRIPTION}, "registry's '1.0.0'"),
-        ({"version": "1.0.0", "description": "Acme vendor TA"}, "not installed by Parsewright"),
+        ({"version": "1.0.0", "description": "Acme vendor TA"}, "not installed by Parsemaxxing"),
     ],
 )
-def test_in_place_update_refuses_anything_but_the_expected_parsewright_ta(
+def test_in_place_update_refuses_anything_but_the_expected_parsemaxxing_ta(
     client, pkgs, monkeypatch, installed, match
 ):
     monkeypatch.setattr(client, "app_info", lambda app: installed)
@@ -633,11 +633,17 @@ def test_update_promotion_needs_the_registry_at_the_expected_version(pg, tmp_pat
 
 
 def test_migration_backfills_tas_promoted_before_the_registry(pg):
-    from parsewright.ledger import store as db
+    from parsemaxxing.ledger import store as db
 
     _done_job(pg, OWNER)
-    for name in ("003_ta_registry.sql", "004_registry_grants.sql"):  # both idempotent
-        pg.conn.execute((db.MIGRATIONS / name).read_text())  # the backfill finds the done job
+    with pg.conn.transaction():  # 003/004 grant to the pre-rename role; 005 renames it back
+        pg.conn.execute("ALTER ROLE parsemaxxing_app RENAME TO parsewright_app")
+        for name in (
+            "003_ta_registry.sql",
+            "004_registry_grants.sql",
+            "005_rename_to_parsemaxxing.sql",
+        ):
+            pg.conn.execute((db.MIGRATIONS / name).read_text())  # the backfill finds the done job
     assert pg.ta(APP)["owner_job"] == OWNER
     assert [v["version"] for v in pg.ta_versions(APP)] == ["1.0.0"]
 
@@ -650,18 +656,18 @@ def test_a_cim_patch_may_add_but_never_drop_a_production_eventtype(tmp_path, pkg
         JOB,
         fake_llm(tmp_path, []),
         UpdateSplunk(),
-        "pw_test",
+        "pmx_test",
         pkgs,
         print,
         5,
         None,
     )
-    kept = f"parsewright_{JOB}_traffic"
+    kept = f"parsemaxxing_{JOB}_traffic"
     shown = r.patch_context("cim")["current"]["eventtypes"]
     assert list(shown) == ["traffic"]  # the agent sees the name it proposes, not the prefix
-    r.keeps_eventtypes({"eventtypes": {kept: {}, f"parsewright_{JOB}_extra": {}}})
+    r.keeps_eventtypes({"eventtypes": {kept: {}, f"parsemaxxing_{JOB}_extra": {}}})
     with pytest.raises(GuardrailBlock, match=r"keep the production eventtype names.*traffic"):
-        r.keeps_eventtypes({"eventtypes": {f"parsewright_{JOB}_network": {}}})
+        r.keeps_eventtypes({"eventtypes": {f"parsemaxxing_{JOB}_network": {}}})
 
 
 def _version(path, sample_text: str) -> dict:
@@ -697,7 +703,7 @@ def test_regression_samples_come_only_from_the_runs_folder_unchanged(tmp_path):
 
 
 def test_promotions_and_rollbacks_of_one_ta_are_serialised(pg, pg_dsn):
-    from parsewright.ledger import store as db
+    from parsemaxxing.ledger import store as db
 
     other = db.connect(pg_dsn)
     try:
@@ -752,7 +758,7 @@ def test_the_app_role_can_only_move_a_tas_version(pg, pg_dsn):
         "a" * 64,
     )
     with psycopg.connect(pg_dsn, autocommit=True) as conn:
-        conn.execute("SET ROLE parsewright_app")
+        conn.execute("SET ROLE parsemaxxing_app")
         conn.execute("UPDATE tas SET current_version = '1.0.0', updated_at = now()")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             conn.execute("UPDATE tas SET owner_job = 'evil0001'")
@@ -781,7 +787,7 @@ class SnapshotSplunk(UpdateSplunk):
 def test_old_samples_without_a_manifest_must_reproduce_production_exactly(prod, pkgs, tmp_path):
     """No manifest for the registered samples: what production gave them at Diagnose is the
     answer key, and a patch that changes any old event is a regression."""
-    from parsewright.validator import mechanical as mech
+    from parsemaxxing.validator import mechanical as mech
 
     old = prod.old[0]
     old.manifest = mech.manifest_for(old.text, "sample.log")
@@ -789,12 +795,12 @@ def test_old_samples_without_a_manifest_must_reproduce_production_exactly(prod, 
     traffic = [{"t": "1", "All_Traffic.src": "192.0.2.1"}]
     splunk = SnapshotSplunk(
         {
-            "parsewright_old_1": {
+            "parsemaxxing_old_1": {
                 "times": [1, 2],
                 "rows": rows,
                 "models": {"Network_Traffic": traffic},
             },
-            "parsewright_new": {"times": [3], "rows": [], "models": {}},
+            "parsemaxxing_new": {"times": [3], "rows": [], "models": {}},
         }
     )
     new = SampleSet(
@@ -803,16 +809,16 @@ def test_old_samples_without_a_manifest_must_reproduce_production_exactly(prod, 
         old.text,
         load_manifest(sample(tmp_path, "acme_fw_v2")),
         old.profile,
-        "parsewright_new",
+        "parsemaxxing_new",
     )
-    r = UpdateRun(new, prod, JOB, fake_llm(tmp_path, []), splunk, "pw_test", pkgs, print, 5, None)
+    r = UpdateRun(new, prod, JOB, fake_llm(tmp_path, []), splunk, "pmx_test", pkgs, print, 5, None)
     r.st = f"{ST}__test_{JOB}_a1"
     r.take_baselines(r.st)
     assert old.baseline is not None and new.baseline is None
     assert r.index_reports(r.st, 0, {})[OLD].passed
     assert r.search_reports("cim")[OLD].passed
     # a patch that changes one old event's src
-    splunk.per_source["parsewright_old_1"]["rows"] = [rows[0], {"t": "2", "src": "192.0.2.9"}]
+    splunk.per_source["parsemaxxing_old_1"]["rows"] = [rows[0], {"t": "2", "src": "192.0.2.9"}]
     report = r.search_reports("extraction")[OLD]
     assert not report.passed and "same fields as production" in report.evidence()
 
@@ -820,8 +826,8 @@ def test_old_samples_without_a_manifest_must_reproduce_production_exactly(prod, 
 def test_an_update_with_zone_less_new_samples_pauses_for_a_human(tmp_path, pkgs, prod, monkeypatch):
     """appsec H2: a guessed TZ for new zone-less samples never passes; the update waits in
     profile review, and resumes with the zone a human stated."""
-    from parsewright.validator import index_time as iv
-    from parsewright.validator import mechanical as mech
+    from parsemaxxing.validator import index_time as iv
+    from parsemaxxing.validator import mechanical as mech
 
     monkeypatch.setattr(
         iv,
@@ -837,7 +843,7 @@ def test_an_update_with_zone_less_new_samples_pauses_for_a_human(tmp_path, pkgs,
         prod,
         fake_llm(tmp_path, []),
         UpdateSplunk(),
-        "pw_test",
+        "pmx_test",
         pkgs,
         JOB,
         out=lines.append,

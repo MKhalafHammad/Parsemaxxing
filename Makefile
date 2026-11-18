@@ -1,4 +1,4 @@
-# Parsewright developer commands. Run `make setup` once after cloning.
+# Parsemaxxing developer commands. Run `make setup` once after cloning.
 .PHONY: setup env up first-run down logs test lint security
 
 VENV := .venv

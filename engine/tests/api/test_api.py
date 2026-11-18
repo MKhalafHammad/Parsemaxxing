@@ -16,8 +16,8 @@ import pytest
 from conftest import FIXTURES, settings
 from fastapi.testclient import TestClient
 
-from parsewright.api import app as api
-from parsewright.api import intake
+from parsemaxxing.api import app as api
+from parsemaxxing.api import intake
 
 SAMPLE = (FIXTURES / "acme_fw.log").read_bytes()
 MANIFEST = (FIXTURES / "acme_fw.manifest.json").read_bytes()
@@ -175,7 +175,7 @@ def test_kill_switch_endpoint(client):
 
 
 def test_event_stream_delivers_each_transition_within_two_seconds(pg, pg_dsn):
-    from parsewright.ledger import store as db
+    from parsemaxxing.ledger import store as db
 
     pg.enqueue("sse00001", "sse:1", "e" * 64, "/tmp/x", {})
 
@@ -247,7 +247,7 @@ def test_untrustworthy_manifests_are_refused(client, manifest):
 
 
 def test_an_empty_report_never_passes():
-    from parsewright.validator.index_time import Report
+    from parsemaxxing.validator.index_time import Report
 
     assert Report([]).passed is False
 
@@ -287,8 +287,8 @@ def test_nul_bytes_anywhere_are_refused():
 
 
 def test_updates_are_only_for_tas_in_the_registry(client, pg):
-    """A parser update replaces a production TA: only one Parsewright promoted qualifies."""
-    for name in ("Splunk_SA_CIM", "TA-parsewright-acme-firewall", "../../etc"):
+    """A parser update replaces a production TA: only one Parsemaxxing promoted qualifies."""
+    for name in ("Splunk_SA_CIM", "TA-parsemaxxing-acme-firewall", "../../etc"):
         r = upload(client, update_of=name)
         assert r.status_code == 422 and "registry" in r.text
     assert client.get("/tas").json() == []
@@ -296,7 +296,7 @@ def test_updates_are_only_for_tas_in_the_registry(client, pg):
     pg.register_ta(
         {
             "job": owner,
-            "app": "TA-parsewright-acme-firewall",
+            "app": "TA-parsemaxxing-acme-firewall",
             "sourcetype": "acme:fw",
             "vendor": "acme",
             "product": "firewall",
@@ -310,15 +310,15 @@ def test_updates_are_only_for_tas_in_the_registry(client, pg):
         client,
         data=v2,
         manifest=m2,
-        update_of="TA-parsewright-acme-firewall",
+        update_of="TA-parsemaxxing-acme-firewall",
         vendor="evil",
         product="x",
     )
     assert r.status_code == 201, r.text
     run = client.get(f"/runs/{r.json()['job']}").json()
-    assert run["form"]["update_of"] == "TA-parsewright-acme-firewall"
+    assert run["form"]["update_of"] == "TA-parsemaxxing-acme-firewall"
     assert (
-        "vendor" not in run["form"] and run["source_key"] == "update:TA-parsewright-acme-firewall"
+        "vendor" not in run["form"] and run["source_key"] == "update:TA-parsemaxxing-acme-firewall"
     )
     (ta,) = client.get("/tas").json()
     assert ta["current_version"] == "1.0.0" and ta["versions"] == ["1.0.0"]

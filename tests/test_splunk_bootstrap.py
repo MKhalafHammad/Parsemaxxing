@@ -35,12 +35,12 @@ def test_roles_hold_exactly_the_capabilities_they_need(bootstrap):
     """Too few breaks a clean install (403 on config reads); more widens a stolen token."""
     caps = {role: set(spec["capabilities"]) for role, spec in bootstrap.ROLES.items()}
     assert caps == {
-        "parsewright_search": {"list_all_objects", "search"},
-        "parsewright_deploy": {
+        "parsemaxxing_search": {"list_all_objects", "search"},
+        "parsemaxxing_deploy": {
             "admin_all_objects",
             "edit_tcp",
             "install_apps",
             "list_all_objects",
         },
-        "parsewright_drift": {"search"},
+        "parsemaxxing_drift": {"search"},
     }

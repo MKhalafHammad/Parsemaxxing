@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Table, TBody, Td, Th, THead, Tr } from "@/components/ui/table";
 import { api, type TA } from "@/lib/api";
 
-/** Add-ons Parsewright promoted, with their versions (read-only). */
+/** Add-ons Parsemaxxing promoted, with their versions (read-only). */
 export default function Registry() {
   const [tas, setTas] = useState<TA[] | null>(null);
   const [error, setError] = useState("");
@@ -18,7 +18,7 @@ export default function Registry() {
     <div className="grid gap-4">
       <div>
         <h1 className="text-xl font-semibold">TA registry</h1>
-        <p className="text-sm text-muted">Add-ons Parsewright promoted. Start a parser update from “New run” on the Runs page.</p>
+        <p className="text-sm text-muted">Add-ons Parsemaxxing promoted. Start a parser update from “New run” on the Runs page.</p>
       </div>
       {error && (
         <p role="alert" className="text-sm text-bad">

@@ -1,9 +1,9 @@
 import pytest
 
-from parsewright.agents.cim_mapper import Alias, CimProposal, Eval, EventType
-from parsewright.agents.extraction import Delims, Extract, ExtractionProposal
-from parsewright.guardrails.index_time import GuardrailBlock
-from parsewright.guardrails.search_time import cim, extraction
+from parsemaxxing.agents.cim_mapper import Alias, CimProposal, Eval, EventType
+from parsemaxxing.agents.extraction import Delims, Extract, ExtractionProposal
+from parsemaxxing.guardrails.index_time import GuardrailBlock
+from parsemaxxing.guardrails.search_time import cim, extraction
 
 ST = "acme:ssh__test_abcd1234_a1"
 JOB = "abcd1234"
@@ -29,8 +29,8 @@ def test_extraction_builds_props_and_transforms():
     )
     out = extraction(p, ST, JOB, SAMPLES)
     assert out["props"]["EXTRACT-auth"].startswith("for (?<user>")
-    assert out["props"]["REPORT-parsewright_delims"] == "parsewright_abcd1234_delims"
-    assert out["transforms"]["parsewright_abcd1234_delims"]["FIELDS"] == '"a", "b"'
+    assert out["props"]["REPORT-parsemaxxing_delims"] == "parsemaxxing_abcd1234_delims"
+    assert out["transforms"]["parsemaxxing_abcd1234_delims"]["FIELDS"] == '"a", "b"'
 
 
 @pytest.mark.parametrize(
@@ -64,7 +64,7 @@ def test_cim_eventtype_is_anchored_by_code_and_tagged_from_spec():
         ],
     )
     out = cim(p, ST, JOB)
-    name = "parsewright_abcd1234_ssh_auth"
+    name = "parsemaxxing_abcd1234_ssh_auth"
     assert out["eventtypes"][name]["search"] == (
         f'sourcetype={ST} (outcome="Accepted" OR outcome="Failed")'
     )
@@ -140,8 +140,8 @@ def test_item_counts_are_capped():
 
 
 def test_the_validators_own_column_name_cannot_be_extracted():
-    """appsec L8: a field named pw_raw would hide behind the raw-line column."""
-    from parsewright.guardrails.search_time import _field
+    """appsec L8: a field named pmx_raw would hide behind the raw-line column."""
+    from parsemaxxing.guardrails.search_time import _field
 
     with pytest.raises(GuardrailBlock):
-        _field("pw_raw", "EXTRACT-x group")
+        _field("pmx_raw", "EXTRACT-x group")

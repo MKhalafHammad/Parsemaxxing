@@ -15,9 +15,9 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FX = ROOT / "engine/parsewright/generator/fixtures"
-API = os.environ.get("PARSEWRIGHT_API", "http://127.0.0.1:8080")
-UI = os.environ.get("PARSEWRIGHT_UI", "http://localhost:3000")
+FX = ROOT / "engine/parsemaxxing/generator/fixtures"
+API = os.environ.get("PARSEMAXXING_API", "http://127.0.0.1:8080")
+UI = os.environ.get("PARSEMAXXING_UI", "http://localhost:3000")
 FINAL = {"awaiting_approval", "stage_failed", "error", "rejected", "done"}
 
 
@@ -32,7 +32,7 @@ def request(
         else http.client.HTTPConnection
     )
     conn = cls(url.hostname or "127.0.0.1", url.port, timeout=60)
-    headers = {"X-Parsewright": "1", **({"Content-Type": ctype} if ctype else {})}
+    headers = {"X-Parsemaxxing": "1", **({"Content-Type": ctype} if ctype else {})}
     try:
         conn.request(method, path, body=body, headers=headers)
         r = conn.getresponse()
@@ -65,7 +65,7 @@ def multipart(fields: dict[str, str], files: dict[str, Path]) -> tuple[bytes, st
 
 def main() -> int:
     if not API.startswith(("http://", "https://")):
-        print("PARSEWRIGHT_API must be an http(s) URL", file=sys.stderr)
+        print("PARSEMAXXING_API must be an http(s) URL", file=sys.stderr)
         return 1
     body, ctype = multipart(
         {"vendor": "acme", "product": "vpn", "auto_approve": "true"},
