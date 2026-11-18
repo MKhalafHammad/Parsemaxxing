@@ -1,25 +1,35 @@
 """parsemaxxing CLI. The CLI and the API share one orchestrator and one PostgreSQL queue.
 
-  parsemaxxing run <file>                    queue a job and process it here (auto-approved profile)
-  parsemaxxing status <job>                  show a run
-  parsemaxxing approve <job> --sha256 <hash> approve exactly the validated package
-  parsemaxxing promote <job>                 install the approved TA under its real names
-  parsemaxxing worker [--id w1]              run one worker
-  parsemaxxing serve [--workers 4]           run the API and a pool of workers
-  parsemaxxing kill on|off                   the kill switch: stop claims and model calls
-  parsemaxxing tas                           the TA registry: promoted TAs and their versions
+Through the engine API (an API token: PARSEMAXXING_API_TOKEN or --token-file, mode 0600/0400;
+URL: PARSEMAXXING_API_URL, default http://127.0.0.1:8080), so they get the API's role checks
+and audit; the engine's worker pool does the work and the CLI waits for it:
+  parsemaxxing run <file>                    queue a job and wait for it (auto-approved profile)
   parsemaxxing update <app> <file>           patch a promoted TA for new-format samples
+  parsemaxxing approve <job> --sha256 <hash> approve exactly the validated package
+  parsemaxxing reject <job>                  reject a run awaiting approval
+  parsemaxxing promote <job>                 wait for the approved TA's promotion
   parsemaxxing rollback <app> <version>      reinstall an exact earlier version of a TA
+  parsemaxxing kill on|off|status            the kill switch: stop claims and model calls
+
+Read-only, straight from the database (app role): status <job>, tas.
+The engine itself: worker [--id w1], serve [--workers 4].
+
+Host-only, straight to the database by design: they must work when the API is down, before the
+first admin exists, or need the owner account or the KEK, which the API never holds:
+  parsemaxxing migrate                       apply migrations (database owner)
   parsemaxxing secrets rotate-kek --new-kek-file <path>  rewrap every vault data key
   parsemaxxing settings import-env [--env-file .env] [--dry-run]  move v1 .env values into
                                              settings and secrets into the vault (once)
   parsemaxxing ledger verify [--expect-head <id>:<hash>]  check the ledger hash chain (and
                                              that a recorded head is still in it)
   parsemaxxing ledger head                   print the newest row as <id>:<hash> (an anchor)
+  parsemaxxing setup-token                   while no admin exists: a new one-time setup token
+  parsemaxxing admin reset <user>            break-glass (database owner): new password, MFA
+                                             cleared, unlocked, every session revoked
   parsemaxxing backup [--out-dir backups]    encrypted pg_dump (age, recipient from settings)
   parsemaxxing restore <file> --identity <age key> --target-dsn <dsn> --yes
 
-`run --local` runs without PostgreSQL (state in run records), as in Phases 2-4.
+`run --local` runs without PostgreSQL or the API (state in run records), as in Phases 2-4.
 """
 
 import argparse
@@ -31,8 +41,10 @@ import signal
 import subprocess  # nosec B404 - only to start this CLI's own worker processes
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 import psycopg
 
@@ -45,21 +57,42 @@ from parsemaxxing.ledger import store as db
 from parsemaxxing.orchestrator import promote
 from parsemaxxing.orchestrator.caps import IngestCaps
 from parsemaxxing.orchestrator.run import run
+from parsemaxxing.ta_builder.naming import require_job
 from parsemaxxing.tools.splunk_client import SplunkClient
 
+API_COMMANDS = ("run", "update", "approve", "reject", "promote", "rollback", "kill")
+BUSY = ("queued", "running", "approved", "promoting")  # the engine's workers are on it
+POLL_S = 2.0
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="parsemaxxing")
+
+def main(argv: list[str] | None = None, api_send=None) -> int:
+    """`api_send`: the HTTP transport of the API commands (tests pass a TestClient-backed one)."""
+    via = argparse.ArgumentParser(add_help=False)
+    via.add_argument(
+        "--token-file",
+        type=Path,
+        help="file holding the API token (mode 0600 or 0400); else PARSEMAXXING_API_TOKEN",
+    )
+    parser = argparse.ArgumentParser(
+        prog="parsemaxxing",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     # The repo's .env, not the working directory's: a planted .env could redirect the tokens.
     parser.add_argument("--env-file", type=Path, default=REPO / ".env")
     sub = parser.add_subparsers(dest="command", required=True)
-    r = sub.add_parser("run", help="build and test a TA for one log file (all three stages)")
+    r = sub.add_parser(
+        "run",
+        parents=[via],
+        allow_abbrev=False,
+        help="build and test a TA for one log file (through the API)",
+    )
     r.add_argument("file", type=Path)
     r.add_argument("--tz", help="timezone of the logs, if known (IANA name)")
     r.add_argument("--vendor", help="vendor name, if known (e.g. acme)")
     r.add_argument("--product", help="product name, if known (e.g. vpn)")
     r.add_argument("--keep", action="store_true", help="leave the test app installed (--local)")
-    r.add_argument("--max-attempts", type=int, help="default: the run.max_attempts setting")
+    r.add_argument("--max-attempts", type=int, help="--local only (else run.max_attempts)")
     r.add_argument("--stages", default="index-time,extraction,cim", help="comma-separated")
     r.add_argument(
         "--local",
@@ -68,10 +101,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     s = sub.add_parser("status", help="show a run")
     s.add_argument("job")
-    a = sub.add_parser("approve", help="approve exactly the validated package")
+    a = sub.add_parser(
+        "approve", parents=[via], allow_abbrev=False, help="approve exactly the validated package"
+    )
     a.add_argument("job")
     a.add_argument("--sha256", required=True)
-    p = sub.add_parser("promote", help="install the approved TA under its real names")
+    j = sub.add_parser(
+        "reject", parents=[via], allow_abbrev=False, help="reject a run awaiting approval"
+    )
+    j.add_argument("job")
+    p = sub.add_parser(
+        "promote", parents=[via], allow_abbrev=False, help="wait for the approved TA's promotion"
+    )
     p.add_argument("job")
     w = sub.add_parser("worker", help="run one worker")
     w.add_argument("--id", default=f"w-{uuid.uuid4().hex[:6]}")
@@ -81,13 +122,23 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--host", default="127.0.0.1")
     v.add_argument("--port", type=int, default=8080)
     sub.add_parser("migrate", help="apply migrations and set the app role's password (owner)")
-    k = sub.add_parser("kill", help="the kill switch")
+    k = sub.add_parser("kill", parents=[via], allow_abbrev=False, help="the kill switch")
     k.add_argument("state", choices=["on", "off", "status"])
     sub.add_parser("tas", help="the TA registry")
-    u = sub.add_parser("update", help="patch a promoted TA for new-format samples")
+    u = sub.add_parser(
+        "update",
+        parents=[via],
+        allow_abbrev=False,
+        help="patch a promoted TA for new-format samples",
+    )
     u.add_argument("app")
     u.add_argument("file", type=Path)
-    b = sub.add_parser("rollback", help="reinstall an exact earlier version of a promoted TA")
+    b = sub.add_parser(
+        "rollback",
+        parents=[via],
+        allow_abbrev=False,
+        help="reinstall an exact earlier version of a promoted TA",
+    )
     b.add_argument("app")
     b.add_argument("version")
     sec = sub.add_parser("secrets", help="the secrets vault")
@@ -104,6 +155,14 @@ def main(argv: list[str] | None = None) -> int:
     lv = lg_sub.add_parser("verify", help="check the hash chain (edited, removed or moved rows)")
     lv.add_argument("--expect-head", help="<id>:<hash> from `ledger head`: must still be there")
     lg_sub.add_parser("head", help="print the newest ledger row as <id>:<hash>")
+    sub.add_parser(
+        "setup-token",
+        help="while no admin exists: a new one-time setup token (app role, no owner credentials)",
+    )
+    ad = sub.add_parser("admin", help="break-glass account recovery (database owner)")
+    ad_sub = ad.add_subparsers(dest="admin_command", required=True)
+    ar = ad_sub.add_parser("reset", help="new password, MFA cleared, sessions revoked")
+    ar.add_argument("user")
     bk = sub.add_parser("backup", help="encrypted database backup (pg_dump | age)")
     bk.add_argument("--out-dir", type=Path, default=REPO / "backups")
     rs = sub.add_parser("restore", help="restore an encrypted backup into a database")
@@ -128,9 +187,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(db.ledger_head(conn))
             return 0
         return verify_ledger(args.expect_head)
+    if args.command == "setup-token":
+        return setup_token()
+    if args.command == "admin":
+        return admin_reset(args.user)
     if args.command in ("backup", "restore"):
         return backup_or_restore(args)
     local = args.command == "run" and args.local
+    if args.command in API_COMMANDS and not local:
+        return via_api(args, api_send)
     settings = config.runtime(local=local)
     if args.command == "run" and args.max_attempts:
         settings = dataclasses.replace(settings, max_attempts=args.max_attempts)
@@ -140,31 +205,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "serve":
             migrate(optional=True)  # inside docker-compose the "migrate" service did this
             return serve(args)
-        conn = db.connect(database_url())
-        store = db.Store(conn)
-        records = promote.PgRecords(conn, settings.runs_dir)
-        if args.command == "run":
-            return queued_run(args, settings, store)
-        if args.command == "update":
-            return queued_run(args, settings, store, update_of=args.app)
+        store = db.Store(db.connect(database_url()))
         if args.command == "tas":
             for t in store.tas():
                 print(
                     f"{t['app']}  {t['sourcetype']}  current {t['current_version']}  "
                     f"versions {', '.join(t['versions'] or [])}"
                 )
-            return 0
-        if args.command == "rollback":
-            print(
-                promote.rollback(
-                    store,
-                    settings.runs_dir,
-                    args.app,
-                    args.version,
-                    SplunkClient(settings),
-                    settings.packages_dir,
-                )
-            )
             return 0
         if args.command == "status":
             row = store.get(args.job)
@@ -183,18 +230,6 @@ def main(argv: list[str] | None = None) -> int:
                 if e["event"] != "log":
                     print(f"  {e['at']:%Y-%m-%dT%H:%M:%S} {e['event']} {json.dumps(e['data'])}")
             return 0
-        if args.command == "approve":
-            print(promote.approve(records, args.job, args.sha256))
-            return 0
-        if args.command == "promote":
-            from parsemaxxing.orchestrator.worker import Worker
-
-            if store.get(args.job) is None or store.get(args.job)["status"] != "approved":
-                raise promote.TransitionRefused("run is not approved")
-            Worker(settings, f"cli-{uuid.uuid4().hex[:6]}").once(only=args.job)
-            row = store.get(args.job)
-            print(f"{args.job}: {row['status']} {row['record'].get('smoke', '')}")
-            return 0 if row["status"] == promote.DONE else 1
         if args.command == "worker":
             from parsemaxxing.orchestrator.worker import Worker
 
@@ -205,13 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"worker {args.id} started")
             Worker(settings, args.id).run_forever(stop)
             return 0
-        if args.state != "status":
-            store.set_kill_switch(args.state == "on")
-        print(
-            f"kill switch: {'on' if store.kill_switch() else 'off'}; "
-            f"tokens today {store.tokens_today()}"
-        )
-        return 0
+        raise AssertionError(args.command)  # every command is dispatched above
     except TokenCeilingExceeded as e:
         print(f"stopped: {e}", file=sys.stderr)
         return 3
@@ -316,16 +345,64 @@ def verify_ledger(expect_head: str | None = None) -> int:
     if expect_head is not None and not db.HEAD.fullmatch(expect_head):
         print("refused: --expect-head is <id>:<64 hex hash> (from `ledger head`)", file=sys.stderr)
         return 4
+    from parsemaxxing.auth import events
+
     with db.connect(database_url()) as conn:
         result = db.verify_ledger(conn, expect_head=expect_head)
+        audit = events.verify(conn)
     for p in result["problems"]:
         print(f"  row {p['id']}: {p['problem']}")
+    for p in audit["problems"]:
+        print(f"  auth_events row {p['id']}: {p['problem']}")
     head = result["head"]
     print(f"{result['rows']} rows; head {head['id']} {head['hash']}")
-    if result["problems"]:
+    print(f"auth_events: {audit['rows']} rows; head {audit['head']['id']} {audit['head']['hash']}")
+    if result["problems"] or audit["problems"]:
         print("ledger verify: FAILED", file=sys.stderr)
         return 5
     print("ledger verify: ok")
+    return 0
+
+
+def setup_token() -> int:
+    """Print a fresh setup token (to this terminal, never a log) and the file it is in."""
+    from parsemaxxing.auth.service import issue_setup_token
+
+    path = promote.runs_root(config.runs_dir()) / "setup-token"
+    with db.connect(database_url()) as conn:
+        token = issue_setup_token(conn, path, actor="cli:setup-token")
+    if token is None:
+        print("refused: setup is complete (an admin exists); use `admin reset`", file=sys.stderr)
+        return 4
+    print(f"setup token (valid 60 minutes, single use; also in {path}):")
+    print(token)
+    return 0
+
+
+def admin_reset(user: str) -> int:
+    """Break-glass: needs the database owner's credentials on the host. The new password is
+    read without echo and never printed."""
+    import getpass
+
+    from parsemaxxing.auth.model import AuthError
+    from parsemaxxing.auth.service import admin_reset as reset
+
+    password = getpass.getpass(f"new password for {user}: ")
+    if getpass.getpass("again: ") != password:
+        print("refused: the passwords differ", file=sys.stderr)
+        return 4
+    try:
+        with db.connect(database_url(admin=True)) as conn:
+            row = reset(conn, user, password)
+    except AuthError as e:
+        print(f"refused: {e.message}", file=sys.stderr)
+        return 4
+    except psycopg.Error as e:
+        print(f"refused: database error ({type(e).__name__})", file=sys.stderr)
+        return 4
+    print(
+        f"{row['username']}: password reset, MFA cleared (enrol again at sign-in), sessions revoked"
+    )
     return 0
 
 
@@ -359,51 +436,106 @@ def backup_or_restore(args) -> int:
     return 0
 
 
-def queued_run(args, settings: Settings, store: db.Store, update_of: str | None = None) -> int:
-    """Queue the file like an upload (same checks), then process exactly that job here."""
-    from parsemaxxing.orchestrator.worker import Worker
+def via_api(args, send=None) -> int:
+    """A mutating command through the engine API with an API token (never printed)."""
+    from parsemaxxing.api.client import Api, ApiError
 
-    sample = intake.check(args.file.read_bytes())
+    try:
+        api = Api(config.api_url(), config.api_token(args.token_file), send)
+        return API_HANDLERS[args.command](api, args)
+    except ApiError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 4
+    except (RuntimeError, ValueError, intake.UploadRefused) as e:  # our own, client-safe
+        print(f"refused: {e}", file=sys.stderr)
+        return 4
+    except OSError as e:
+        print(f"refused: cannot read a file ({type(e).__name__})", file=sys.stderr)
+        return 4
+
+
+def _wait(api, job: str) -> dict:
+    """The run once the engine's workers are done with it (Ctrl-C stops waiting, not the run)."""
+    while (row := api.call("GET", f"/runs/{job}"))["status"] in BUSY:
+        time.sleep(POLL_S)
+    return row
+
+
+def api_run(api, args) -> int:
+    """Upload the file like the UI (the engine checks it), then wait for the run."""
+    if args.command == "run" and args.max_attempts:
+        raise ValueError("--max-attempts needs --local; queued runs use run.max_attempts")
+    files = {"file": (intake.safe_name(args.file.name), args.file.read_bytes())}
     beside = args.file.with_suffix(".manifest.json")
-    manifest = beside.read_bytes() if beside.is_file() else intake.fixture_manifest(sample)
-    form: dict = {"auto_approve": True}
-    if update_of:
-        if store.ta(update_of) is None:
-            raise promote.TransitionRefused(f"{update_of} is not in the TA registry")
-        form["update_of"] = update_of
-        key = f"update:{update_of}"
+    if beside.is_file():
+        files["manifest"] = ("manifest.json", beside.read_bytes())
+    fields = {"auto_approve": "true"}
+    if args.command == "update":
+        fields["update_of"] = args.app
     else:
-        for name in ("vendor", "product", "tz"):
-            if getattr(args, name):
-                form[name] = getattr(args, name)
-        key = (
-            f"{form['vendor']}:{form['product']}"
-            if "vendor" in form and "product" in form
-            else f"cli:{sample.sha256[:16]}"
-        )
-    job = uuid.uuid4().hex[:8]
-    # A private copy, as for uploads: the samples stay the regression set of later updates,
-    # and a path outside the runs folder could be swapped for a link (appsec Phase 7 M1).
-    uploads = promote.runs_root(settings.runs_dir) / "uploads"
-    uploads.mkdir(mode=0o700, exist_ok=True)
-    path, digest = intake.save(uploads, job, sample, manifest)
-    form["validation"] = (
-        ("uploaded" if beside.is_file() else "fixture") if manifest else "mechanical"
-    )
-    if digest:
-        form["manifest_sha256"] = digest
-    job, duplicate = store.enqueue(job, key, sample.sha256, str(path), form)
-    if duplicate:
-        row = store.get(job)
-        print(f"duplicate of job {job} ({row['status']}): nothing to do")
+        fields |= {n: getattr(args, n) for n in ("vendor", "product", "tz") if getattr(args, n)}
+    out = api.call("POST", "/uploads", fields=fields, files=files)
+    job = require_job(out["job"])
+    if out["duplicate"]:
+        print(f"duplicate of job {job}: nothing to do")
         return 0
-    print(f"job {job} queued (~{intake.estimate_tokens(sample)} tokens estimated)")
-    Worker(settings, f"cli-{uuid.uuid4().hex[:6]}").once(only=job)
-    row = store.get(job)
-    print(f"{job}: {row['status']} {row['record'].get('result', '')}".rstrip())
+    print(f"job {job} queued (~{out['estimated_tokens']} tokens estimated)")
+    row = _wait(api, job)
+    record = row.get("record") or {}
+    print(f"{job}: {row['status']} {record.get('result', '')}".rstrip())
     if row["status"] == "awaiting_approval":
-        print(f"approve: parsemaxxing approve {job} --sha256 {row['record']['sha256_test']}")
+        print(f"approve: parsemaxxing approve {job} --sha256 {record.get('sha256_test')}")
+    elif row["status"] == "profile_review":
+        print("the run needs a profile review (for example its timezone) in the UI")
     return 0 if row["status"] in ("awaiting_approval", "done") else 1
+
+
+def api_approve(api, args) -> int:
+    job = require_job(args.job)
+    print(api.call("POST", f"/runs/{job}/approve", {"sha256": args.sha256})["result"])
+    return 0
+
+
+def api_reject(api, args) -> int:
+    job = require_job(args.job)
+    print(f"{job}: {api.call('POST', f'/runs/{job}/reject', {})['status']}")
+    return 0
+
+
+def api_promote(api, args) -> int:
+    """Approval queues the promotion for the engine's workers; this waits for it."""
+    job = require_job(args.job)
+    if api.call("GET", f"/runs/{job}")["status"] not in ("approved", "promoting", "done"):
+        raise ValueError("run is not approved")
+    row = _wait(api, job)
+    print(f"{job}: {row['status']} {(row.get('record') or {}).get('smoke', '')}".rstrip())
+    return 0 if row["status"] == promote.DONE else 1
+
+
+def api_rollback(api, args) -> int:
+    path = f"/tas/{quote(args.app, safe='')}/rollback"
+    print(api.call("POST", path, {"version": args.version}, timeout=600)["result"])
+    return 0
+
+
+def api_kill(api, args) -> int:
+    if args.state != "status":
+        api.call("POST", "/admin/kill", {"on": args.state == "on"})
+    out = api.call("GET", "/admin/status")
+    state = "on" if out["kill_switch"] else "off"
+    print(f"kill switch: {state}; tokens today {out['tokens_today']}")
+    return 0
+
+
+API_HANDLERS = {
+    "run": api_run,
+    "update": api_run,
+    "approve": api_approve,
+    "reject": api_reject,
+    "promote": api_promote,
+    "rollback": api_rollback,
+    "kill": api_kill,
+}
 
 
 def local_run(args, settings: Settings) -> int:
