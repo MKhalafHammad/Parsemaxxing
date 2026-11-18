@@ -18,6 +18,7 @@ dependencies = [
     "openai>=3.39",
     "regex>=2026.9",
     "python-multipart>=0.0.20",  # FastAPI file uploads
+    "cryptography>=50.0.2",  # vault: AES-256-GCM (secrets/)
 ]
 
 [project.scripts]
