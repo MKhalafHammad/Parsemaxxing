@@ -79,6 +79,36 @@ jobs:
           retention-days: 30
       - run: scripts/image_check.sh scan
 
+  # LDAP sign-in against a real OpenLDAP container (engine/tests/auth/test_ldap_integration.py).
+  # PARSEMAXXING_LDAP_IT=1 makes a missing docker or a failed image build a failure, not a skip.
+  ldap-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.11-alpine@sha256:e5d2edd28b1f8d40a0a6c0c9cdc545b19b56a0d5d88f94bc11a97d970d4700d0
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PARSEMAXXING_TEST_DSN: postgresql://postgres@localhost:5432/parsemaxxing_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install the engine
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e 'engine[dev]'
+      - run: make ldap-test
+
   # Encrypted backup and restore round trip against a real PostgreSQL (scripts/restore_test.sh).
   restore-test:
     runs-on: ubuntu-latest

@@ -1,6 +1,6 @@
 # Parsemaxxing developer commands. Run `make setup` once after cloning.
 .PHONY: setup env secrets up first-run down logs test e2e lint security lock digests sbom scan \
-	backup restore restore-test setup-token
+	backup restore restore-test setup-token ldap-test
 
 VENV := .venv
 BIN := $(VENV)/bin
@@ -42,9 +42,15 @@ down:
 logs:
 	docker compose logs -f
 
+# The OpenLDAP integration tests run in `make ldap-test` (CI job ldap-test), not here.
 test:
-	$(BIN)/pytest engine/tests tests
+	$(BIN)/pytest -m "not ldap_integration" engine/tests tests
 	$(MAKE) e2e
+
+# Real OpenLDAP in docker (engine/tests/auth/openldap); fails instead of skipping without docker.
+# Needs PARSEMAXXING_TEST_DSN set to a throwaway PostgreSQL, as `make test` does.
+ldap-test:
+	PARSEMAXXING_LDAP_IT=1 $(BIN)/pytest -m ldap_integration engine/tests/auth
 
 e2e:
 	cd web && npm run build && npm run test:e2e
