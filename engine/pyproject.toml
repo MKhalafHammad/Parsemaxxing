@@ -21,6 +21,8 @@ dependencies = [
     "cryptography>=50.0.2",  # vault: AES-256-GCM (secrets/)
     "argon2-cffi>=25.1",  # auth: Argon2id password hashes
     "pyotp>=2.9",  # auth: TOTP (RFC 6238)
+    "ldap3>=2.9.1",  # auth: LDAP sign-in (LDAPS or StartTLS only)
+    "pyasn1>=0.6.1,<0.7",  # ldap3 dependency; 0.7 may drop what ldap3 2.9.1 imports
 ]
 
 [project.scripts]
