@@ -21,6 +21,41 @@ export type Me = { user: User; stage: Stage; via: string; mfa_required?: boolean
 export type SignedIn = { stage: Stage; user: User; recovery_codes_left?: number };
 export type Session = { id: string; created_at: string; last_seen_at: string; expires_at: string; ip: string; user_agent: string; current: boolean };
 export type ApiToken = { id: string; name: string; role: Role; owner: string; created_at: string; expires_at: string; last_used_at: string | null; status: "active" | "expired" | "revoked" };
+// Directory sign-in settings (GET/PUT /auth/ldap, admin). Secrets never appear: the bind
+// password is only `bind_password_set`, the CA bundle only its certificate summary.
+export type LdapServer = { url: string; start_tls: boolean };
+export type GroupMode = "member_of" | "member" | "ad_nested";
+export type LdapSettings = {
+  enabled: boolean;
+  servers: LdapServer[];
+  bind_dn: string | null;
+  user_search_base: string | null;
+  user_filter: string;
+  username_attribute: string;
+  display_name_attribute: string;
+  group_mode: GroupMode;
+  group_search_base: string | null;
+  nested_groups: boolean;
+  group_roles: Record<string, Role>;
+  connect_timeout_seconds: number;
+  read_timeout_seconds: number;
+  page_size: number;
+  require_mfa: boolean;
+  session_max_hours: number;
+};
+export type Certificate = { subject: string; issuer: string; not_after: string; sha256: string };
+export type LdapView = {
+  settings: LdapSettings;
+  bind_password_set: boolean;
+  ca_bundle: Certificate[] | null;
+  sources: Record<string, string>;
+  version: number;
+  missing_for_enable: string[];
+  local_admins: string[];
+};
+export type LdapStep = { step: string; ok: boolean; detail: string; certificate_info?: Certificate };
+export type LdapConnection = { ok: boolean; servers: { url: string; ok: boolean; steps: LdapStep[] }[] };
+export type LdapLookup = { ok: boolean; found: number; dn: string | null; matched_groups: string[]; role: Role | null; message: string };
 export type AuditEvent = { id: number; at: string; actor: string; user_id: string | null; event: string; outcome: string; ip: string; detail: Record<string, unknown> };
 
 export type Job = {
@@ -153,5 +188,5 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return body as T;
 }
 
-export const postJson = <T,>(path: string, data: unknown) =>
-  api<T>(path, { method: "POST", body: JSON.stringify(data), headers: { "Content-Type": "application/json" } });
+export const postJson = <T,>(path: string, data: unknown, method = "POST") =>
+  api<T>(path, { method, body: JSON.stringify(data), headers: { "Content-Type": "application/json" } });

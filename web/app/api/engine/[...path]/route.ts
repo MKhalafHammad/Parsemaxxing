@@ -28,6 +28,10 @@ const ROUTES: { method: string; pattern: RegExp }[] = [
   { method: "POST", pattern: /^auth\/mfa\/(enrol|confirm|disable|recovery-codes)$/ },
   { method: "POST", pattern: new RegExp(`^auth/(sessions|tokens)/${UUID}/revoke$`) },
   { method: "POST", pattern: new RegExp(`^auth/users/${UUID}/(role|disable|enable|sessions/revoke)$`) },
+  // Phase 14 directory (LDAP) settings and tests (admin).
+  { method: "GET", pattern: /^auth\/ldap$/ },
+  { method: "PUT", pattern: /^auth\/ldap$/ },
+  { method: "POST", pattern: /^auth\/ldap\/(ca-bundle|test-connection|test-user-lookup)$/ },
 ];
 
 // The https proxy proves it set X-Forwarded-For by sending this secret as X-Pmx-Hop. Read once;
@@ -116,6 +120,9 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   return forward(req, (await ctx.params).path);
 }
 export async function POST(req: NextRequest, ctx: Ctx) {
+  return forward(req, (await ctx.params).path);
+}
+export async function PUT(req: NextRequest, ctx: Ctx) {
   return forward(req, (await ctx.params).path);
 }
 export const dynamic = "force-dynamic";

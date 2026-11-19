@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 
 import type { Page } from "@playwright/test";
 
-import { expect, signedInAs, test, user } from "./fixtures";
+import { expect, ldapView, signedInAs, test, user } from "./fixtures";
 
 // axe-core is already in the tree (through eslint-plugin-jsx-a11y); no new dependency. It is
 // evaluated through the DevTools protocol, which the page's CSP does not apply to.
@@ -33,6 +33,7 @@ async function mockAccount(page: Page) {
     r.fulfill({ json: [{ id: 1, at: "2026-11-19 10:00:00+00:00", actor: "avery", user_id: null, event: "login", outcome: "success", ip: "192.0.2.10", detail: {} }] }),
   );
   await page.route("**/api/engine/auth/mfa/enrol", (r) => r.fulfill({ json: { secret: "JBSWY3DPEHPK3PXP", otpauth_uri: "otpauth://totp/Parsemaxxing:avery?secret=JBSWY3DPEHPK3PXP" } }));
+  await page.route("**/api/engine/auth/ldap", (r) => r.fulfill({ json: ldapView({ missing_for_enable: ["ca_bundle"] }) }));
   await page.route("**/api/engine/runs", (r) => r.fulfill({ json: [] }));
   await page.route("**/api/engine/tas", (r) => r.fulfill({ json: [] }));
 }
@@ -47,6 +48,7 @@ const PAGES: [string, string][] = [
   ["/settings/api-tokens", "API tokens"],
   ["/settings/users", "Users"],
   ["/settings/audit-log", "Audit log"],
+  ["/settings/authentication", "Authentication and LDAP"],
   ["/", "Runs"],
 ];
 

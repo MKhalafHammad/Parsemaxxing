@@ -130,3 +130,36 @@ export async function mockRun(page: Page, body: object, stream: object[] = []) {
 
 /** No unified-diff markers anywhere in a diff view's text. */
 export const DIFF_MARKERS = /(^|\n)\s*(\+|-)|---|\+\+\+|@@/;
+
+// Synthetic directory: example.com names and documentation values only.
+const ldapSettings = (extra: Record<string, unknown> = {}) => ({
+  enabled: false,
+  servers: [{ url: "ldaps://ldap1.example.com:636", start_tls: false }],
+  bind_dn: "cn=parsemaxxing,ou=services,dc=example,dc=com",
+  user_search_base: "ou=people,dc=example,dc=com",
+  user_filter: "(uid={username})",
+  username_attribute: "uid",
+  display_name_attribute: "displayName",
+  group_mode: "member_of",
+  group_search_base: null,
+  nested_groups: false,
+  group_roles: { "cn=pmx-admins,ou=groups,dc=example,dc=com": "admin" },
+  connect_timeout_seconds: 5,
+  read_timeout_seconds: 10,
+  page_size: 500,
+  require_mfa: false,
+  session_max_hours: 12,
+  ...extra,
+});
+export const ldapCert = (subject = "CN=Example Root CA,O=Acme") => ({ subject, issuer: subject, not_after: "2030-01-01T00:00:00+00:00", sha256: "ab".repeat(32) });
+/** GET /auth/ldap as an admin sees it. */
+export const ldapView = (extra: Record<string, unknown> = {}, s: Record<string, unknown> = {}) => ({
+  settings: ldapSettings(s),
+  bind_password_set: true,
+  ca_bundle: [ldapCert()],
+  sources: { enabled: "default", servers: "platform", bind_dn: "platform", user_filter: "default" },
+  version: 3,
+  missing_for_enable: [],
+  local_admins: ["avery", "sam"],
+  ...extra,
+});

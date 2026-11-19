@@ -15,6 +15,7 @@ import { loginUrl, stagePath } from "@/lib/next-path";
 const NAV = [
   { href: "/", label: "Runs" },
   { href: "/tas", label: "TA registry" },
+  { href: "/settings/authentication", label: "Authentication and LDAP" },
   { href: "/settings/users", label: "Users" },
   { href: "/settings/api-tokens", label: "API tokens" },
   { href: "/settings/audit-log", label: "Audit log" },

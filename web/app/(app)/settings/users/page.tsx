@@ -23,6 +23,8 @@ export default function UsersPage() {
   const [users, setUsers] = useState<User[] | null>(null);
   const [error, setError] = useState<string | Error>("");
   const [role, setRole] = useState("");
+  // Mounted only on the client (the shell waits for /auth/me), so the URL can seed the filter.
+  const [source, setSource] = useState(() => new URLSearchParams(window.location.search).get("source") ?? "");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | Error>("");
   const [action, setAction] = useState<Action | null>(null);
@@ -54,7 +56,7 @@ export default function UsersPage() {
     setNewRole(user.role);
     setAction({ kind, user });
   };
-  const shown = (users ?? []).filter((u) => !role || u.role === role);
+  const shown = (users ?? []).filter((u) => (!role || u.role === role) && (!source || u.source === source));
   const name = action ? action.user.display_name || action.user.username : "";
 
   return (
@@ -82,7 +84,15 @@ export default function UsersPage() {
           </h2>
           {isAdmin && (
             <>
-              <Label htmlFor="role-filter" className="ml-auto text-muted">
+              <Label htmlFor="source-filter" className="ml-auto text-muted">
+                Source
+              </Label>
+              <select id="source-filter" value={source} onChange={(e) => setSource(e.target.value)} className={SELECT}>
+                <option value="">All</option>
+                <option value="local">Local</option>
+                <option value="ldap">Directory</option>
+              </select>
+              <Label htmlFor="role-filter" className="text-muted">
                 Role
               </Label>
               <select id="role-filter" value={role} onChange={(e) => setRole(e.target.value)} className={SELECT}>
@@ -102,7 +112,7 @@ export default function UsersPage() {
         ) : shown.length === 0 ? (
           <p className="p-4 text-sm text-muted">
             No users match this filter.{" "}
-            <button type="button" className="underline underline-offset-2" onClick={() => setRole("")}>
+            <button type="button" className="underline underline-offset-2" onClick={() => (setRole(""), setSource(""))}>
               Clear filters
             </button>
           </p>
@@ -127,7 +137,7 @@ export default function UsersPage() {
                 <Tr key={u.id}>
                   <Td className="pl-4">{u.display_name || u.username}</Td>
                   <Td className="font-mono">{u.username}</Td>
-                  <Td>{u.source === "local" ? "Local" : u.source}</Td>
+                  <Td>{u.source === "local" ? "Local" : u.source === "ldap" ? <Badge variant="running">Directory</Badge> : u.source}</Td>
                   <Td>{roleWord(u.role)}</Td>
                   <Td>
                     {u.mfa ? (
@@ -154,9 +164,21 @@ export default function UsersPage() {
                   </Td>
                   <Td>
                     <span className="flex flex-wrap gap-2">
-                      <Button size="sm" variant="outline" onClick={() => act("role", u)}>
-                        Change role… <span className="sr-only">{u.username}</span>
-                      </Button>
+                      {u.source === "ldap" ? (
+                        /* The engine refuses it: a directory user's role comes from their groups at each sign-in. */
+                        <span className="inline-flex flex-wrap items-center gap-2">
+                          <Button size="sm" variant="outline" aria-disabled aria-describedby={`ldap-role-${u.id}`} className="cursor-not-allowed opacity-50">
+                            Change role… <span className="sr-only">{u.username}</span>
+                          </Button>
+                          <span id={`ldap-role-${u.id}`} className="text-[13px] text-muted">
+                            Role comes from directory groups.
+                          </span>
+                        </span>
+                      ) : (
+                        <Button size="sm" variant="outline" onClick={() => act("role", u)}>
+                          Change role… <span className="sr-only">{u.username}</span>
+                        </Button>
+                      )}
                       <Button size="sm" variant="outline" onClick={() => act("signout", u)}>
                         Sign out everywhere… <span className="sr-only">{u.username}</span>
                       </Button>
