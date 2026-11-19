@@ -16,19 +16,19 @@ fi
 DOCKER=${DOCKER:-docker}
 compose() { $DOCKER compose "$@"; }
 
-# Login exists (Phase 13), but nothing goes beyond localhost before the Phase 14 hardening
-# (LDAP, build-plan): the https proxy stays on loopback unless the admin opts in (M3).
+# Login (Phase 13) and LDAP (Phase 14) are built, but nothing goes beyond localhost until Phases 12 to 14
+# are reviewed and merged (build-plan): the https proxy stays on loopback unless the admin opts in (M3).
 bind=${HTTPS_BIND-$(grep -sE '^HTTPS_BIND=' .env | tail -n1 | cut -d= -f2- | tr -d "\"' " || true)}
 case "$bind" in
   "" | 127.0.0.1 | ::1 | "[::1]" | localhost) ;;
   *)
     if [ "${PMX_ALLOW_UNAUTHENTICATED_NETWORK:-}" != yes ]; then
       echo "refused: HTTPS_BIND=$bind would expose the UI beyond this machine. Login is built, but" >&2
-      echo "  exposure beyond localhost waits for the Phase 14 hardening (LDAP, docs/build-plan.md)." >&2
+      echo "  exposure beyond localhost waits until Phases 12 to 14 are reviewed and merged (docs/build-plan.md)." >&2
       echo "  Use 127.0.0.1, or set PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes to accept the risk." >&2
       exit 1
     fi
-    echo "warning: HTTPS_BIND=$bind exposes the UI before the Phase 14 hardening (PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes)" >&2
+    echo "warning: HTTPS_BIND=$bind exposes the UI before Phases 12 to 14 are reviewed and merged (PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes)" >&2
     ;;
 esac
 
