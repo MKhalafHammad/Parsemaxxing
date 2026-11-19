@@ -78,16 +78,28 @@ export default function TokensPage() {
             {isAdmin ? "Every token on the platform. Admins can revoke any of them." : "Your tokens. A token's role is never higher than yours."}
           </p>
         </div>
-        <Button
-          onClick={() => {
-            setDays(30);
-            setNow(Date.now());
-            setCreateError("");
-            setCreating(true);
-          }}
-        >
-          <Plus aria-hidden className="h-4 w-4" /> Create token
-        </Button>
+        {me?.user.source === "ldap" ? (
+          /* Display only: the engine refuses tokens for directory users (a token would outlive a group change). */
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <Button aria-disabled aria-describedby="token-directory" className="cursor-not-allowed opacity-50">
+              <Plus aria-hidden className="h-4 w-4" /> Create token
+            </Button>
+            <span id="token-directory" className="text-[13px] text-muted">
+              Directory accounts can&apos;t create API tokens. Ask an admin for a local service account.
+            </span>
+          </span>
+        ) : (
+          <Button
+            onClick={() => {
+              setDays(30);
+              setNow(Date.now());
+              setCreateError("");
+              setCreating(true);
+            }}
+          >
+            <Plus aria-hidden className="h-4 w-4" /> Create token
+          </Button>
+        )}
       </div>
       <FormError error={error} />
 

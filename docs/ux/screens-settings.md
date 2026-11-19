@@ -33,6 +33,7 @@ Common to all Settings pages:
 - LDAP: [flows.md F11](flows.md#f11-ldap-setup-phase-14). Servers (ordered list with up and down buttons, not drag), CA bundle, bind DN, bind password (write-only), search settings, membership mode, group to role mapping table, Advanced (timeouts, page size), Test connection, Test a user lookup.
 - Break-glass note, always visible: "Local accounts always work when the directory is down. Local admins: 2." with a link to Users filtered by local.
 - **Acceptance:** plain LDAP (`ldap://` without StartTLS) is not offered; Test a user lookup shows DN, matched groups and role only.
+- Decision, Phase 14: built at `/settings/authentication`. The bind password field is required when the servers change, with "Your password" beside it; the CA bundle upload also asks for both. "Require MFA for directory users" and "Directory session length" are on this screen. Viewers see "Only admins can see the directory settings." in place of the form. The rules in [flows.md F2 and F11](flows.md#f11-ldap-setup-phase-14) apply (no "directory down" banner on sign-in; owner to confirm).
 
 ## Users (Phase 15)
 

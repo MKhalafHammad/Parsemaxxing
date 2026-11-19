@@ -100,6 +100,8 @@ test("the auth routes are allowlisted with their methods and id shapes", async (
     ["POST", "auth/tokens"], ["POST", `auth/tokens/${id}/revoke`], ["GET", "auth/users"], ["POST", "auth/users"],
     ["POST", `auth/users/${id}/role`], ["POST", `auth/users/${id}/disable`], ["POST", `auth/users/${id}/enable`],
     ["POST", `auth/users/${id}/sessions/revoke`], ["GET", "audit"],
+    ["GET", "auth/ldap"], ["PUT", "auth/ldap"], ["POST", "auth/ldap/ca-bundle"], ["POST", "auth/ldap/test-connection"],
+    ["POST", "auth/ldap/test-user-lookup"],
   ];
   for (const [method, path] of forwarded) {
     const r = await request.fetch(`/api/engine/${path}`, { method, headers: SAME });
@@ -108,7 +110,12 @@ test("the auth routes are allowlisted with their methods and id shapes", async (
   const refused = [
     ["GET", "auth/login"], ["POST", "auth/me"], ["POST", "audit"], ["POST", "auth/users/not-a-uuid/role"],
     ["POST", `auth/users/${id}/delete`], ["POST", "auth/tokens/0000000A-0000-4000-8000-00000000000B/revoke"], ["GET", "health"],
+    ["POST", "auth/ldap"], ["PUT", "auth/users"], ["GET", "auth/ldap/test-connection"], ["PUT", "auth/ldap/ca-bundle"],
+    ["POST", "auth/ldap/bind-password"],
   ];
+  // PUT is a state change: the same CSRF checks as POST.
+  expect((await request.put("/api/engine/auth/ldap", { headers: { Origin: SAME.Origin }, data: {} })).status()).toBe(403);
+  expect((await request.put("/api/engine/auth/ldap", { headers: { ...SAME, Origin: "https://evil.example.com" }, data: {} })).status()).toBe(403);
   for (const [method, path] of refused) {
     const r = await request.fetch(`/api/engine/${path}`, { method, headers: SAME });
     expect(r.status(), `${method} ${path}`).toBe(404);

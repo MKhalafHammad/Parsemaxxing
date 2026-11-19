@@ -220,6 +220,9 @@ def pg(pg_dsn):
             conn.execute(f"ALTER TABLE {table} ENABLE TRIGGER {table}_no_update")
             conn.execute(f"ALTER TABLE {table} ENABLE TRIGGER {table}_no_truncate")
         conn.execute("UPDATE settings SET value = 'false'::jsonb WHERE key = 'kill_switch'")
+        conn.execute(
+            "DELETE FROM settings_groups WHERE grp = 'ldap'"
+        )  # LDAP off unless a test sets it
     yield db.Store(conn)
     conn.close()
 
@@ -259,3 +262,29 @@ def api_client(app):
 
     headers = {api.CSRF_HEADER: "1", "Origin": WEB_ORIGIN}
     return TestClient(app, base_url="https://localhost", headers=headers)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "ldap_integration: needs docker for a real OpenLDAP server (skips without it unless"
+        " PARSEMAXXING_LDAP_IT=1)",
+    )
+    # ldap3 2.9.1 imports pyasn1's deprecated tagMap/typeMap names (auth/README.md: revisit).
+    for name in ("tagMap", "typeMap"):
+        config.addinivalue_line(
+            "filterwarnings", f"ignore:{name} is deprecated:DeprecationWarning:ldap3.utils.asn1"
+        )
+
+
+@pytest.fixture(autouse=True)
+def _no_failure_padding(monkeypatch):
+    """Failed sign-ins are padded to `failure_min_seconds` (1 s); tests skip the wait. The
+    padding tests put the real sleep back."""
+    from parsemaxxing.auth import service
+
+    async def no_wait(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(service, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(service, "_asleep", no_wait)

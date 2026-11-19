@@ -35,10 +35,12 @@ Parsemaxxing v2 is under development and has no 2.0.0 release yet. Only the late
 
 ## Accounts and access
 
-- Built in Phase 13 (in review): local accounts with `viewer` and `admin` roles, TOTP MFA required for admins by default, server-side sessions, API tokens with an expiry of at most 90 days, and an audit log nobody can edit. Every API route needs a session or a token. LDAP is planned (Phase 14).
+- Built in Phase 13 (in review): local accounts with `viewer` and `admin` roles, TOTP MFA required for admins by default, server-side sessions, API tokens with an expiry of at most 90 days, and an audit log nobody can edit. Every API route needs a session or a token.
+- Built in Phase 14 (in review): directory (LDAP) sign-in over LDAPS or StartTLS only, trusting only the CA bundle an admin uploads, with the host name checked. Usernames are escaped per RFC 4515 and empty passwords are refused before any connection. Directory groups map to `viewer` or `admin`; no mapped group means no access. The service bind password is write-only and kept in the vault; it is never written to logs, the audit log or any response. Directory users cannot create API tokens. Local accounts never touch the directory, so local admins work while it is down.
 - There are no default credentials. The first admin is created with a one-time setup token (`make setup-token`).
 - Lost access: `parsemaxxing admin reset <user>` on the host (needs the database owner credentials) sets a new password, clears MFA, unlocks the account and revokes its sessions and tokens.
-- Do not expose the platform beyond localhost before Phase 14 lands. `make up` refuses a non-loopback `HTTPS_BIND` unless you opt in.
+- Lost access for a directory user is fixed in the directory; `parsemaxxing admin reset` resets local accounts only.
+- Do not expose the platform beyond localhost until Phases 12 to 14 are reviewed and merged. `make up` refuses a non-loopback `HTTPS_BIND` unless you set `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes`.
 
 ## Real log retention
 

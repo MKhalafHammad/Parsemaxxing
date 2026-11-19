@@ -1,13 +1,24 @@
 """Auth API: first-run setup, login (password then MFA), logout, own account, MFA, sessions,
-API tokens, users (admin) and the read-only audit log. Mounted by api/app.py."""
+API tokens, users (admin), directory (LDAP) settings and tests (admin) and the read-only audit
+log. Mounted by api/app.py."""
 
-from typing import Annotated
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request, Response
 from fastapi import Path as PathParam
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from starlette.concurrency import run_in_threadpool
 
 from parsemaxxing.auth import events
+from parsemaxxing.auth.ldap import (
+    CA_MAX_BYTES,
+    Directory,
+    DirectoryUnavailable,
+    ca_summary,
+    check_ca_bundle,
+)
 from parsemaxxing.auth.model import AuthError, Principal, Role
 from parsemaxxing.auth.policy import (
     SESSION_COOKIE,
@@ -24,7 +35,21 @@ from parsemaxxing.auth.policy import (
     set_session_cookie,
     user_agent,
 )
-from parsemaxxing.auth.service import TOKEN_MAX_DAYS, admin_exists, public_user
+from parsemaxxing.auth.service import (
+    TOKEN_MAX_DAYS,
+    admin_exists,
+    pad_failure,
+    public_user,
+    revoke_directory_sessions,
+)
+from parsemaxxing.secrets import Vault, VaultError
+from parsemaxxing.settings import (
+    PLATFORM,
+    ConflictError,
+    LdapSettings,
+    SettingsError,
+    SettingsService,
+)
 
 router = APIRouter()
 Id = Annotated[
@@ -95,9 +120,8 @@ class RoleBody(_Body):
     role: Role
 
 
-def _me(p: Principal, user: dict, require_mfa_admins: bool) -> dict:
+def _me(p: Principal, user: dict, required: bool) -> dict:
     # mfa_required: the UI hides "Turn off MFA"; the engine refuses it anyway (mfa_disable).
-    required = user["role"] == Role.ADMIN and require_mfa_admins
     return {"user": public_user(user), "stage": p.stage, "via": p.via, "mfa_required": required}
 
 
@@ -133,14 +157,21 @@ def setup(body: SetupBody, request: Request, response: Response, store: StoreDep
 
 
 @router.post("/auth/login")
-def login(body: LoginBody, request: Request, response: Response, store: StoreDep) -> dict:
-    auth = auth_for(request, store)
-    raw, user, stage = auth.login(
-        body.username, body.password, client_ip(request), user_agent(request)
-    )
-    # Session fixation: the new id is always fresh, and any session the browser brought ends.
-    auth.revoke_raw(request.cookies.get(SESSION_COOKIE, ""), "replaced at sign-in")
-    return _signed_in(response, auth, raw, stage, user)
+async def login(body: LoginBody, request: Request, response: Response, store: StoreDep) -> dict:
+    def work() -> dict:  # database and Argon2: in a worker thread
+        auth = auth_for(request, store)
+        raw, user, stage = auth.login(
+            body.username, body.password, client_ip(request), user_agent(request), pad=False
+        )
+        # Session fixation: the new id is always fresh; any session the browser brought ends.
+        auth.revoke_raw(request.cookies.get(SESSION_COOKIE, ""), "replaced at sign-in")
+        return _signed_in(response, auth, raw, stage, user)
+
+    try:
+        return await run_in_threadpool(work)
+    except AuthError as e:
+        await pad_failure(e)  # on the event loop: holds no worker thread
+        raise
 
 
 @router.post("/auth/login/mfa")
@@ -171,7 +202,8 @@ def logout(request: Request, response: Response, store: StoreDep) -> dict:
 @router.get("/auth/me")
 def me(p: AnySession, request: Request, store: StoreDep) -> dict:
     auth = auth_for(request, store)
-    return _me(p, auth.user(p.user_id), auth.s.require_mfa_admins)
+    user = auth.user(p.user_id)
+    return _me(p, user, auth.mfa_required(user))
 
 
 # --- own account -------------------------------------------------------------------------
@@ -372,3 +404,235 @@ def audit_log(
         }
         for e in events.recent(store.conn, limit, before, event)
     ]
+
+
+# --- directory (LDAP) settings and tests (admin, session only; design 7.4) ----------------
+
+
+class LdapBody(_Body):
+    settings: dict[str, Any] = Field(default_factory=dict, max_length=40)  # non-secret fields
+    bind_password: Password | None = None  # write-only: stored in the vault, never returned
+    current_password: Password | None = None  # the admin's own; needed to change the endpoint
+    expected_version: Annotated[int, Field(ge=0)] | None = None
+
+
+class CaBundleBody(_Body):
+    pem: Annotated[str, Field(min_length=1, max_length=CA_MAX_BYTES)]
+    bind_password: Password  # a new trust anchor never gets the stored password (M1)
+    current_password: Password
+    expected_version: Annotated[int, Field(ge=0)] | None = None
+
+
+REENTER_BIND = "Enter the bind password again when you change servers or the CA bundle."
+
+
+def _endpoint_change(
+    request: Request, store, p: Principal, bind_password: str | None, current: str | None
+) -> None:
+    """Servers or CA bundle change: the stored bind password must never go to a new endpoint,
+    so it is entered again, and the admin re-authenticates (M1)."""
+    if not bind_password:
+        raise AuthError(422, REENTER_BIND)
+    if not current:
+        raise AuthError(422, "Enter your own current password to change servers or the CA bundle.")
+    auth_for(request, store)._check_password(p, current, client_ip(request))
+
+
+class LookupBody(_Body):
+    username: Annotated[str, Field(min_length=1, max_length=256)]
+
+
+def _ldap_view(request: Request, store) -> dict:
+    svc = SettingsService(store.conn, request.app.state.environ)
+    s = svc.get(LdapSettings, PLATFORM)
+    explained = svc.explain(LdapSettings, PLATFORM)
+    ca = None
+    if s.ca_bundle:
+        with _vault(request, store).use(s.ca_bundle, PLATFORM) as p:  # not secret: a summary
+            ca = ca_summary(p.text())
+    local_admins = store.conn.execute(
+        "SELECT username FROM users WHERE role = 'admin' AND source = 'local'"
+        " AND disabled_at IS NULL ORDER BY username"
+    ).fetchall()
+    return {
+        "settings": s.model_dump(mode="json", exclude=LdapSettings.secret_fields()),
+        "bind_password_set": s.bind_password is not None,
+        "ca_bundle": ca,
+        "sources": {k: v.source for k, v in explained.items()},
+        "version": svc.stored(LdapSettings, PLATFORM)[1],
+        "missing_for_enable": s.missing_for_enable(),
+        "local_admins": [r["username"] for r in local_admins],
+    }
+
+
+def _vault(request: Request, store) -> Vault:
+    try:
+        return Vault(store.conn, request.app.state.kek())
+    except VaultError:
+        raise AuthError(503, "The engine cannot open the vault.") from None
+
+
+def _invalid(e: ValidationError) -> AuthError:
+    # Field and rule only (pydantic's `input` is never echoed); the bind password never
+    # reaches this model.
+    problems = "; ".join(
+        f"{'.'.join(str(p) for p in err['loc']) or 'settings'}: {err['msg'][:200]}"
+        for err in e.errors()[:5]
+    )
+    return AuthError(422, f"Invalid LDAP settings: {problems}")
+
+
+@router.get("/auth/ldap")
+def ldap_settings(p: AdminSession, request: Request, store: StoreDep) -> dict:
+    return _ldap_view(request, store)
+
+
+@router.put("/auth/ldap")
+def update_ldap_settings(
+    body: LdapBody, p: AdminSession, request: Request, store: StoreDep
+) -> dict:
+    values = dict(body.settings)
+    if bad := set(values) & LdapSettings.secret_fields():
+        raise AuthError(422, f"Set {', '.join(sorted(bad))} through its own field or route.")
+    svc = SettingsService(store.conn, request.app.state.environ)
+    current = svc.get(LdapSettings, PLATFORM).model_dump(mode="json")
+    try:
+        merged = LdapSettings.model_validate(current | values)
+    except ValidationError as e:
+        raise _invalid(e) from None
+    old = LdapSettings.model_validate(current)
+    endpoint = merged.servers != old.servers
+    if endpoint:  # before the transaction: a failed re-authentication is counted
+        _endpoint_change(request, store, p, body.bind_password, body.current_password)
+    if merged.enabled and (missing := merged.missing_for_enable()):
+        if body.bind_password:
+            missing = [m for m in missing if m != "bind_password"]
+        if missing:
+            raise AuthError(422, f"LDAP cannot be turned on without: {', '.join(missing)}.")
+    with store.conn.transaction():
+        if body.bind_password:
+            values["bind_password"] = _vault(request, store).put(
+                PLATFORM, "ldap.bind_password", body.bind_password, p.username
+            )
+        try:
+            svc.set(
+                LdapSettings, PLATFORM, values, p.username, expected_version=body.expected_version
+            )
+        except ConflictError:
+            raise AuthError(
+                409, "The LDAP settings changed meanwhile. Reload and try again."
+            ) from None
+        except SettingsError as e:  # messages name fields, never values
+            raise AuthError(422, str(e)) from None
+        revoked = 0
+        if endpoint or (old.enabled and not merged.enabled):
+            revoked = revoke_directory_sessions(store.conn, "ldap settings changed")
+        fields = sorted(set(body.settings) | ({"bind_password"} if body.bind_password else set()))
+        detail: dict = {"fields": fields, "directory_sessions_revoked": revoked}
+        if endpoint:
+            detail["servers"] = [s.url for s in merged.servers]  # not secret; who points where
+        auth_for(request, store).audit(
+            "ldap_settings_change", "success", p.username, p.user_id, client_ip(request), **detail
+        )
+    return _ldap_view(request, store)
+
+
+@router.post("/auth/ldap/ca-bundle")
+def upload_ldap_ca_bundle(
+    body: CaBundleBody, p: AdminSession, request: Request, store: StoreDep
+) -> dict:
+    try:
+        summary = check_ca_bundle(body.pem)
+    except ValueError as e:  # messages are ours: no PEM content
+        raise AuthError(422, str(e)) from None
+    _endpoint_change(request, store, p, body.bind_password, body.current_password)
+    svc = SettingsService(store.conn, request.app.state.environ)
+    with store.conn.transaction():
+        vault = _vault(request, store)
+        values = {
+            "ca_bundle": vault.put(PLATFORM, "ldap.ca_bundle", body.pem, p.username),
+            "bind_password": vault.put(
+                PLATFORM, "ldap.bind_password", body.bind_password, p.username
+            ),
+        }
+        try:
+            svc.set(
+                LdapSettings, PLATFORM, values, p.username, expected_version=body.expected_version
+            )
+        except ConflictError:
+            raise AuthError(
+                409, "The LDAP settings changed meanwhile. Reload and try again."
+            ) from None
+        revoked = revoke_directory_sessions(store.conn, "ldap CA bundle changed")
+        auth_for(request, store).audit(
+            "ldap_ca_bundle",
+            "success",
+            p.username,
+            p.user_id,
+            client_ip(request),
+            certificates=[c["sha256"] for c in summary],
+            bind_password_reentered=True,
+            directory_sessions_revoked=revoked,
+        )
+    return _ldap_view(request, store)
+
+
+@contextmanager
+def _directory(request: Request, store, p: Principal, kind: str) -> Iterator[Directory]:
+    auth = auth_for(request, store)
+    try:
+        with auth.directory() as d:
+            yield d
+    except DirectoryUnavailable as e:
+        auth.audit(
+            "ldap_test",
+            "failure",
+            p.username,
+            p.user_id,
+            client_ip(request),
+            kind=kind,
+            reason=e.reason,
+        )
+        if e.reason == "not_configured":
+            raise AuthError(
+                409, "Set the servers, CA bundle, bind DN, bind password and search base first."
+            ) from None
+        raise AuthError(503, f"The directory could not answer ({e.reason}).") from None
+
+
+@router.post("/auth/ldap/test-connection")
+def test_ldap_connection(p: AdminSession, request: Request, store: StoreDep) -> dict:
+    with _directory(request, store, p, "connection") as d:
+        servers = d.test_connection()
+    ok = any(s["ok"] for s in servers)
+    auth_for(request, store).audit(
+        "ldap_test",
+        "success" if ok else "failure",
+        p.username,
+        p.user_id,
+        client_ip(request),
+        kind="connection",
+        servers=[s["ok"] for s in servers],
+    )
+    return {"ok": ok, "servers": servers}
+
+
+@router.post("/auth/ldap/test-user-lookup")
+def test_ldap_user_lookup(
+    body: LookupBody, p: AdminSession, request: Request, store: StoreDep
+) -> dict:
+    with _directory(request, store, p, "lookup") as d:
+        out = d.lookup(body.username)
+    ok = out["found"] == 1 and out["role"] is not None
+    # The typed name is not recorded (it may not exist); the outcome is.
+    auth_for(request, store).audit(
+        "ldap_test",
+        "success" if ok else "failure",
+        p.username,
+        p.user_id,
+        client_ip(request),
+        kind="lookup",
+        found=out["found"],
+        role=out["role"],
+    )
+    return {"ok": ok} | out

@@ -3,8 +3,14 @@
 `conn` is an autocommit psycopg connection with dict rows (ledger.store.connect). Every
 credential is stored as a hash (Argon2id for passwords, SHA-256 for 256-bit random values);
 TOTP secrets live in the vault. Failures raise AuthError with a message for the user.
+
+Directory (LDAP) users (design 7.4) sign in with the same form: a name that is not a local
+account goes to the directory when LDAP is on. They get a local row (source 'ldap', no password
+hash) so sessions, MFA, audit and created_by work; the role is re-read from their groups at
+every sign-in. Local accounts never touch the directory, so they work while it is down.
 """
 
+import asyncio
 import hashlib
 import hmac
 import math
@@ -13,16 +19,25 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from functools import cached_property
 from pathlib import Path
 
 import psycopg
 import pyotp
 
 from parsemaxxing.auth import events, passwords
+from parsemaxxing.auth.ldap import (
+    Connect,
+    Directory,
+    DirectoryRefused,
+    DirectoryUnavailable,
+    DirectoryUser,
+)
 from parsemaxxing.auth.model import AuthError, Principal, Role, Stage
 from parsemaxxing.secrets import Kek, Vault, VaultError
-from parsemaxxing.settings import PLATFORM, AuthSettings
+from parsemaxxing.settings import PLATFORM, AuthSettings, LdapSettings, SettingsService
 
 LOGIN_FAILED = "Sign-in failed. Check your user name and password."
 SETUP_INVALID = (
@@ -51,6 +66,28 @@ def _key(kind: str, value: str) -> str:
 def _wait_text(seconds: int) -> str:
     minutes = max(1, math.ceil(seconds / 60))
     return f"Too many attempts. Try again in {minutes} minute{'s' if minutes > 1 else ''}."
+
+
+def _sleep(seconds: float) -> None:  # tests replace both (engine/tests/conftest.py)
+    time.sleep(seconds)
+
+
+async def _asleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)
+
+
+def _pad(started: float, minimum: float) -> None:
+    """Hold a failed sign-in until `minimum` seconds after it started: local and directory
+    names, and each directory failure step, then take the same time from outside."""
+    if (left := minimum - (time.monotonic() - started)) > 0:
+        _sleep(left)
+
+
+async def pad_failure(e: AuthError) -> None:
+    """The API's padding: waits on the event loop, so a failed sign-in holds no worker thread
+    (a blocking sleep would let concurrent failures stall every other request)."""
+    if e.pad_until and (left := e.pad_until - time.monotonic()) > 0:
+        await _asleep(left)
 
 
 def admin_exists(conn: psycopg.Connection) -> bool:
@@ -115,13 +152,22 @@ def public_user(row: dict) -> dict:
 
 
 class Auth:
+    ldap_connect: Connect | None = None  # tests replace the directory transport (MOCK_SYNC)
+
     def __init__(
         self,
         conn: psycopg.Connection,
         settings: AuthSettings,
         kek: Callable[[], Kek] | None = None,
+        environ: Mapping[str, str] | None = None,
     ):
         self.conn, self.s, self._kek = conn, settings, kek
+        self._environ = dict(environ or {})
+
+    @cached_property
+    def ldap(self) -> LdapSettings:
+        """Read only on the paths that need it (sign-in, account checks), not per request."""
+        return SettingsService(self.conn, self._environ).get(LdapSettings, PLATFORM)
 
     def audit(self, event: str, outcome: str, actor: str, user_id=None, ip="", **detail) -> None:
         events.record(
@@ -167,9 +213,13 @@ class Auth:
 
     # --- login ---------------------------------------------------------------------------
 
-    def login(self, username: str, password: str, ip: str, ua: str) -> tuple[str, dict, Stage]:
+    def login(
+        self, username: str, password: str, ip: str, ua: str, pad: bool = True
+    ) -> tuple[str, dict, Stage]:
         """Password step. Returns (session value, user, stage). Unknown, disabled and wrong
-        password are one failure: same message, same Argon2 work, same lockout."""
+        password are one failure: same message, same Argon2 work, same lockout, same minimum
+        time. `pad=False` (the async API route): the failure carries `pad_until` and the
+        caller waits with `pad_failure` instead of sleeping here."""
         name = username.strip().lower()
         keys = (_key("user", name), _key("ip", ip))
         try:
@@ -177,20 +227,23 @@ class Auth:
         except AuthError:
             self.audit("login", "refused", "anonymous", ip=ip, reason="locked")
             raise
-        user = self.conn.execute("SELECT * FROM users WHERE username = %s", (name,)).fetchone()
-        ok = passwords.verify(user["password_hash"] if user else None, password)
-        if not ok or user["disabled_at"] is not None:
-            locked = max(
-                self.fail(keys[0], self.s.lockout_threshold),
-                self.fail(keys[1], self.s.ip_lockout_threshold),
-            )
-            who = user["username"] if user else "anonymous"
-            self.audit("login", "failure", who, user and user["id"], ip)
-            if locked:
-                self.audit("lockout", "refused", who, user and user["id"], ip, seconds=locked)
-            raise AuthError(401, LOGIN_FAILED)
+        started = time.monotonic()
+        try:
+            user = self.conn.execute("SELECT * FROM users WHERE username = %s", (name,)).fetchone()
+            if (user is None or user["source"] == "ldap") and self.ldap.enabled:
+                user = self._directory_login(name, password, ip, keys)
+            else:
+                ok = passwords.verify(user["password_hash"] if user else None, password)
+                if not ok or user["disabled_at"] is not None:
+                    self._login_failed(keys, user, ip)
+        except AuthError as e:
+            if e.status == 401:  # every failed sign-in takes at least the same time (L1)
+                e.pad_until = started + self.s.failure_min_seconds
+                if pad:
+                    _pad(started, self.s.failure_min_seconds)
+            raise
         self.clear(keys[0])
-        if passwords.needs_rehash(user["password_hash"]):
+        if user["password_hash"] and passwords.needs_rehash(user["password_hash"]):
             self.conn.execute(
                 "UPDATE users SET password_hash = %s, updated_at = now() WHERE id = %s",
                 (passwords.hash_password(password), user["id"]),
@@ -201,10 +254,131 @@ class Auth:
         self.audit("login", "success", user["username"], user["id"], ip, stage=stage)
         return raw, user, stage
 
+    def _login_failed(
+        self, keys: tuple[str, str], user: dict | None, ip: str, extra: str | None = None, **detail
+    ) -> None:
+        locked = max(
+            self.fail(keys[0], self.s.lockout_threshold),
+            self.fail(keys[1], self.s.ip_lockout_threshold),
+            self.fail(extra, self.s.lockout_threshold) if extra else 0,
+        )
+        who = user["username"] if user else "anonymous"
+        self.audit("login", "failure", who, user and user["id"], ip, **detail)
+        if locked:
+            self.audit("lockout", "refused", who, user and user["id"], ip, seconds=locked)
+        raise AuthError(401, LOGIN_FAILED)
+
+    # --- directory (LDAP) users ----------------------------------------------------------
+
+    @contextmanager
+    def directory(self) -> Iterator[Directory]:
+        """A Directory holding the bind password and CA bundle only inside this block."""
+        s = self.ldap
+        if not (s.bind_password and s.ca_bundle):
+            raise DirectoryUnavailable("not_configured")
+        try:
+            vault = Vault(self.conn, self._kek()) if self._kek else None
+            if vault is None:
+                raise VaultError("no KEK")
+            with vault.use(s.bind_password, PLATFORM) as pw, vault.use(s.ca_bundle, PLATFORM) as ca:
+                yield Directory(s, pw.text(), ca.text(), self.ldap_connect)
+        except VaultError:
+            raise DirectoryUnavailable("vault") from None
+
+    def _directory_login(self, name: str, password: str, ip: str, keys: tuple[str, str]) -> dict:
+        """Same failure message as a local login; the reason goes to the audit row only.
+        Failures also count against the entry's stable identity (L5: one account reached
+        through several typed names locks once). A directory outage is not counted towards
+        lockout: shared client IPs would otherwise lock out the local break-glass admins too
+        (T12.6). Argon2 work is done here as well, and `login` pads every failure (L1)."""
+        passwords.verify(None, password)
+
+        def unlocked(identity: str) -> None:  # before the user bind: no guess reaches it
+            if self.throttle_wait(_key("dir", identity)):
+                raise DirectoryRefused("locked", identity)
+
+        try:
+            with self.directory() as d:
+                found = d.authenticate(name, password, unlocked)
+        except DirectoryUnavailable as e:
+            self.audit("login", "failure", "anonymous", ip=ip, source="ldap", reason=e.reason)
+            raise AuthError(401, LOGIN_FAILED) from None
+        except DirectoryRefused as e:
+            extra = _key("dir", e.identity) if e.identity else None
+            self._login_failed(keys, None, ip, extra, source="ldap", reason=e.reason)
+        dir_key = _key("dir", found.identity)
+        try:
+            user = self._provision(found, ip)
+        except DirectoryRefused as e:  # local_name_conflict, identity_mismatch
+            self._login_failed(keys, None, ip, dir_key, source="ldap", reason=e.reason)
+        if user["disabled_at"] is not None:
+            self._login_failed(keys, user, ip, dir_key, source="ldap", reason="disabled")
+        self.clear(dir_key)
+        return user
+
+    def _provision(self, found: DirectoryUser, ip: str) -> dict:
+        """Create or update the local row of a directory user, bound to the entry's stable
+        identity at first sign-in. A role change (groups changed) revokes their sessions and
+        tokens like an admin's role change. Refuses (DirectoryRefused) a name taken by a local
+        account, or a row bound to another directory entry."""
+        with self.conn.transaction():
+            old = self.conn.execute(
+                "SELECT * FROM users WHERE username = %s FOR UPDATE", (found.username,)
+            ).fetchone()
+            if old is not None and old["source"] != "ldap":
+                raise DirectoryRefused("local_name_conflict")
+            if old is not None and old["directory_id"] not in (None, found.identity):
+                raise DirectoryRefused("identity_mismatch")
+            try:
+                with self.conn.transaction():  # savepoint: the identity may be another row's
+                    if old is None:
+                        row = self.conn.execute(
+                            "INSERT INTO users (id, username, display_name, role, source,"
+                            " directory_id) VALUES (%s, %s, %s, %s, 'ldap', %s) RETURNING *",
+                            (
+                                uuid.uuid4(),
+                                found.username,
+                                found.display_name,
+                                found.role,
+                                found.identity,
+                            ),
+                        ).fetchone()
+                    else:
+                        row = self.conn.execute(
+                            "UPDATE users SET display_name = %s, role = %s, directory_id = %s,"
+                            " updated_at = now() WHERE id = %s RETURNING *",
+                            (found.display_name, found.role, found.identity, old["id"]),
+                        ).fetchone()
+            except psycopg.errors.UniqueViolation:  # renamed entry, or a racing first sign-in
+                raise DirectoryRefused("identity_mismatch") from None
+            if old is None:
+                self.audit("user_create", "success", "ldap", row["id"], ip, source="ldap")
+            elif old["role"] != found.role:
+                self.revoke_all(row["id"], "role change")
+                n = revoke_user_tokens(self.conn, row["id"])
+                self.audit(
+                    "role_change",
+                    "success",
+                    "ldap",
+                    row["id"],
+                    ip,
+                    old=old["role"],
+                    new=found.role,
+                    tokens_revoked=n,
+                    groups=list(found.groups)[:20],
+                )
+        return row
+
+    def mfa_required(self, user: dict) -> bool:
+        """Admins (local or directory) when "require MFA for admins" is on; every directory
+        user when the LDAP `require_mfa` setting is on."""
+        admin = user["role"] == Role.ADMIN and self.s.require_mfa_admins
+        return admin or (user["source"] == "ldap" and self.ldap.require_mfa)
+
     def _stage_after_password(self, user: dict) -> Stage:
         if self._mfa(user["id"], confirmed=True):
             return "mfa"
-        if user["role"] == Role.ADMIN and self.s.require_mfa_admins:
+        if self.mfa_required(user):
             return "enrol"
         return "full"
 
@@ -239,10 +413,14 @@ class Auth:
 
     def new_session(self, user_id, stage: Stage, ip: str, ua: str) -> str:
         raw = secrets.token_urlsafe(32)  # 256 bits; only its hash is stored
+        ttl = self.ttl(stage)
+        row = self.conn.execute("SELECT source FROM users WHERE id = %s", (user_id,)).fetchone()
+        if row and row["source"] == "ldap":  # a group removal takes effect within this cap
+            ttl = min(ttl, self.ldap.session_max_hours * 3600)
         self.conn.execute(
             "INSERT INTO sessions (id, token_hash, user_id, stage, expires_at, ip, user_agent)"
             " VALUES (%s, %s, %s, %s, now() + make_interval(secs => %s), %s, %s)",
-            (uuid.uuid4(), sha256(raw), user_id, stage, self.ttl(stage), ip[:64], ua[:200]),
+            (uuid.uuid4(), sha256(raw), user_id, stage, ttl, ip[:64], ua[:200]),
         )
         return raw
 
@@ -344,6 +522,10 @@ class Auth:
         if not p.role.covers(role):
             self.audit("token_create", "refused", p.username, p.user_id, ip, role=role)
             raise AuthError(403, "A token's role can't be higher than your own.")
+        if self.user(p.user_id)["source"] != "local":
+            # A token would keep a role for up to 90 days with no group check (T12.4).
+            self.audit("token_create", "refused", p.username, p.user_id, ip, reason="ldap")
+            raise AuthError(403, "API tokens are for local accounts. Ask an admin for one.")
         if not 1 <= days <= TOKEN_MAX_DAYS:
             raise AuthError(422, f"Token expiry must be 1 to {TOKEN_MAX_DAYS} days.")
         raw = "pmxt_" + secrets.token_urlsafe(32)
@@ -443,11 +625,17 @@ class Auth:
         return row
 
     def _keeps_an_admin(self, user: dict) -> None:
-        """Refuse a change that would leave no active admin (break-glass access)."""
-        if user["role"] != Role.ADMIN or user["disabled_at"] is not None:
+        """Refuse a change that would leave no active local admin (break-glass access: a
+        directory admin cannot sign in while the directory is down)."""
+        if (
+            user["role"] != Role.ADMIN
+            or user["disabled_at"] is not None
+            or user["source"] != "local"
+        ):
             return
         other = self.conn.execute(
-            "SELECT 1 FROM users WHERE role = 'admin' AND disabled_at IS NULL AND id <> %s LIMIT 1",
+            "SELECT 1 FROM users WHERE role = 'admin' AND disabled_at IS NULL AND source = 'local'"
+            " AND id <> %s LIMIT 1",
             (user["id"],),
         ).fetchone()
         if other is None:
@@ -457,6 +645,8 @@ class Auth:
         with self.conn.transaction():
             self.conn.execute("SELECT pg_advisory_xact_lock(%s)", (ADMIN_LOCK,))
             user = self.user(user_id)
+            if user["source"] != "local":
+                raise AuthError(409, "A directory user's role comes from their groups.")
             if user["role"] == role:
                 return user
             if role != Role.ADMIN:
@@ -508,13 +698,29 @@ class Auth:
         key = _key("user", p.username)
         self._refuse_if_locked(key)
         user = self.user(p.user_id)
-        if not passwords.verify(user["password_hash"], password):
+        if not self._password_ok(user, password):
             self.fail(key, self.s.lockout_threshold)
             self.audit("reauth", "failure", p.username, p.user_id, ip)
             raise AuthError(403, "That password is not correct.")
         return user
 
+    def _password_ok(self, user: dict, password: str) -> bool:
+        if user["source"] == "local":
+            return passwords.verify(user["password_hash"], password)
+        passwords.verify(None, password)
+        if not self.ldap.enabled:
+            return False
+        try:
+            with self.directory() as d:
+                return d.authenticate(user["username"], password).username == user["username"]
+        except DirectoryRefused:
+            return False
+        except DirectoryUnavailable:
+            raise AuthError(503, "The directory is unavailable. Try again later.") from None
+
     def change_password(self, p: Principal, current: str, new: str, ip: str) -> None:
+        if self.user(p.user_id)["source"] != "local":
+            raise AuthError(409, "Change your password in your organisation's directory.")
         self._check_password(p, current, ip)
         try:
             passwords.check(new, p.username)
@@ -605,8 +811,9 @@ class Auth:
 
     def mfa_disable(self, p: Principal, password: str, ip: str) -> None:
         user = self._check_password(p, password, ip)
-        if user["role"] == Role.ADMIN and self.s.require_mfa_admins:
-            raise AuthError(409, "MFA is required for admins.")
+        if self.mfa_required(user):
+            who = "admins" if user["role"] == Role.ADMIN else "directory users"
+            raise AuthError(409, f"MFA is required for {who}.")
         row = self.conn.execute(
             "DELETE FROM user_mfa WHERE user_id = %s RETURNING secret_id", (p.user_id,)
         ).fetchone()
@@ -711,11 +918,11 @@ def admin_reset(conn: psycopg.Connection, username: str, password: str) -> dict:
     with conn.transaction():
         user = conn.execute(
             "UPDATE users SET password_hash = %s, password_changed_at = now(), disabled_at = NULL,"
-            " updated_at = now() WHERE username = %s RETURNING *",
+            " updated_at = now() WHERE username = %s AND source = 'local' RETURNING *",
             (passwords.hash_password(password), name),
         ).fetchone()
         if user is None:
-            raise AuthError(404, f"no user {name}")
+            raise AuthError(404, f"no local user {name}")
         conn.execute("DELETE FROM recovery_codes WHERE user_id = %s", (user["id"],))
         conn.execute("DELETE FROM user_mfa WHERE user_id = %s", (user["id"],))
         conn.execute(
@@ -732,6 +939,16 @@ def admin_reset(conn: psycopg.Connection, username: str, password: str) -> dict:
             conn, "admin_reset", "success", "cli:admin-reset", str(user["id"]), tokens_revoked=n
         )
     return user
+
+
+def revoke_directory_sessions(conn: psycopg.Connection, reason: str) -> int:
+    """Every session of every directory user (LDAP turned off, servers or CA changed)."""
+    cur = conn.execute(
+        "UPDATE sessions SET revoked_at = now(), revoked_reason = %s WHERE revoked_at IS NULL"
+        " AND user_id IN (SELECT id FROM users WHERE source = 'ldap')",
+        (reason,),
+    )
+    return cur.rowcount
 
 
 def revoke_user_tokens(conn: psycopg.Connection, user_id) -> int:

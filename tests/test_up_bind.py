@@ -1,4 +1,4 @@
-"""scripts/up.sh: refuses a non-loopback HTTPS_BIND before the Phase 14 hardening (finding M3), and
+"""scripts/up.sh: refuses a non-loopback HTTPS_BIND until Phases 12 to 14 are reviewed and merged (finding M3), and
 goes on without LLM_API_KEY in .env (init_env.py exit 2), since the vault may hold it.
 
 Runs a copy of up.sh in a temporary repo whose init_env.py and make_secrets.py are stubs that
@@ -39,7 +39,7 @@ def run(
 @pytest.mark.parametrize("bind", ["0.0.0.0", "192.0.2.10", "'0.0.0.0'", "::"])
 def test_non_loopback_bind_in_env_file_is_refused(tmp_path: Path, bind: str) -> None:
     r = run(tmp_path, f"HTTPS_BIND={bind}\n")
-    assert r.returncode == 1 and "refused" in r.stderr and "Phase 14" in r.stderr
+    assert r.returncode == 1 and "refused" in r.stderr and "Phases 12 to 14" in r.stderr
 
 
 def test_environment_overrides_env_file(tmp_path: Path) -> None:

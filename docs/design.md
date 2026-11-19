@@ -617,7 +617,7 @@ Plain Python, no agent framework: the flow is fixed and small, and readable code
 | UI | Next.js + shadcn/ui, live updates over server-sent events from FastAPI | Accessible components, no business logic in the client | Built |
 | Lab | Splunk Enterprise standalone on a VM | Real Splunk for the lab probes | Built |
 | Local stack | `docker-compose.yml` with the official Splunk Enterprise image + the app | One-command setup (`make up`) | Built |
-| LDAP | `ldap3` | Pure-Python client with LDAPS, StartTLS and RFC 4515 filter escaping ([7.4](#74-ldap)) | Planned (Phase 14) |
+| LDAP | `ldap3` 2.9.1, with `pyasn1` pinned `>=0.6.1,<0.7` | Pure-Python client with LDAPS, StartTLS and RFC 4515 filter escaping ([7.4](#74-ldap)). 2.9.1 (2021) is the last release; revisit: replace with `python-ldap` if `pyasn1` 0.7 drops the names ldap3 imports, or if a CVE in either appears | Built (Phase 14, in review) |
 | Password hashing | `argon2-cffi` 25.1.0 | Argon2id, the OWASP-recommended algorithm ([7.3](#73-authentication-and-authorization)) | Built (Phase 13) |
 | MFA | `pyotp` 2.10.0 | TOTP per RFC 6238 ([7.3](#73-authentication-and-authorization)) | Built (Phase 13) |
 | Encryption | `cryptography` | AES-256-GCM envelope encryption for the vault; no custom crypto ([7.5](#75-settings-from-the-ui-and-the-secrets-vault)) | Built (Phase 12) |
@@ -700,7 +700,7 @@ Each was tested against the real Meta Model API and Splunk; details and evidence
 | [7.1 Environments, customers and topology](#71-environments-customers-and-topology) | 17 | Planned |
 | [7.2 Deployment pipeline](#72-deployment-pipeline-build-and-deploy-are-separate) | 18 | Planned |
 | [7.3 Authentication and authorization](#73-authentication-and-authorization) | 13 | Built (Phase 13, in review), except Reset MFA and Unlock routes and the idle-timeout banner (15), and raw-sample audit and masking for viewers (with customers, 17 and 21); LDAP is 7.4 |
-| [7.4 LDAP](#74-ldap) | 14 | Planned |
+| [7.4 LDAP](#74-ldap) | 14 | Built (Phase 14, in review); the `ad_nested` group mode is tested against a mock only |
 | [7.5 Settings and the secrets vault](#75-settings-from-the-ui-and-the-secrets-vault) | 12 (environment and client scopes with 17) | Partly built (Phase 12: settings service, vault, v1 import, database backups; UI, per-job snapshots, expiry tracking and package-store backups planned) |
 | [7.6 LLM providers and per-agent models](#76-llm-providers-and-per-agent-models) | 16 | Planned |
 | [7.7 Security baseline](#77-security-baseline) | 11 (document), every phase, verified in 24 | Partly built (Phase 12 rows of A02, A03, A04, A08, A10; see the baseline doc) |
@@ -1037,7 +1037,7 @@ Produces a deployment bundle: the `.tgz`, a `SHA256SUMS` file, and a numbered ru
 
 ## 7.3 Authentication and authorization
 
-**Status: built (Phase 13, in review).** Closes residual risks R1 and R10; exposure beyond localhost still waits for Phase 14. Code: `engine/parsemaxxing/auth/` ([README](../engine/parsemaxxing/auth/README.md)). Not built: Reset MFA and Unlock routes for admins (Phase 15; `parsemaxxing admin reset` covers both today), the idle-timeout warning banner (Phase 15, WCAG 2.2.1), a QR code at MFA enrolment (Phase 15), the audit of viewers' raw-sample views and "mask raw samples for viewers" (no production customers before Phase 17; masking 21). LDAP is 7.4 (Phase 14).
+**Status: built (Phase 13, in review).** Closes residual risks R1 and R10; exposure beyond localhost is still refused by `make up` (see 7.4). Code: `engine/parsemaxxing/auth/` ([README](../engine/parsemaxxing/auth/README.md)). Not built: Reset MFA and Unlock routes for admins (Phase 15; `parsemaxxing admin reset` covers both today), the idle-timeout warning banner (Phase 15, WCAG 2.2.1), a QR code at MFA enrolment (Phase 15), the audit of viewers' raw-sample views and "mask raw samples for viewers" (no production customers before Phase 17; masking 21). LDAP is 7.4 (Phase 14).
 
 What Phase 13 built, beyond the table below:
 - The common-password list is the project's own, 672 entries: smaller than a published top-10k list. Lockout: 5 failures per user name and 20 per client IP, 60 s doubling to 900 s; unknown user names lock like known ones.
@@ -1067,7 +1067,32 @@ What Phase 13 built, beyond the table below:
 
 ## 7.4 LDAP
 
-**Status: planned (Phase 14).**
+**Status: built (Phase 14, in review).** Code: `engine/parsemaxxing/auth/ldap.py`, routes in `auth/routes.py`, settings group `ldap` in `settings/groups.py`, migration `008_ldap_users.sql`, screen `web/app/(app)/settings/authentication/` ([auth README](../engine/parsemaxxing/auth/README.md#directory-sign-in-ldap-phase-14)). Tests: `engine/tests/auth/test_ldap.py` (79, with mocks) and `test_ldap_integration.py` (23, against a real OpenLDAP in the CI job `ldap-test`, `make ldap-test`). The `ad_nested` mode is tested against a mock only (OpenLDAP has no in-chain rule).
+
+What Phase 14 built, beyond the list below:
+- TLS: `ldaps://`, or `ldap://` with StartTLS; plain LDAP is refused in the settings and again before any bind. Only the uploaded CA bundle is trusted, the host name is checked, TLS 1.2 is the minimum. Failover never falls back to plain LDAP.
+- Failover: servers are tried in order, starting from the one that answered last; only network and TLS failures move to the next one. Any bind result is an answer.
+- Filter: one template with `{username}` 1 to 4 times, each replaced by the RFC 4515-escaped name. Exactly one entry or fail; a server that stops at its size limit counts as more than one.
+- Passwords that are empty, contain control characters or fail SASLprep (RFC 4013) are refused before any connection.
+- Groups: `member_of` (the user's `memberOf`), `member` (search `(member=<user DN>)`, optionally recursive: cycle guard, 8 levels, at most 1000 groups), `ad_nested` (`LDAP_MATCHING_RULE_IN_CHAIN`). The highest mapped role wins; no mapped group means no access.
+- Directory rows are bound to the entry's `entryUUID`, else `objectGUID`, else its DN, at first sign-in; a later sign-in from an entry with another identity is refused (`identity_mismatch`). The role is re-evaluated at every sign-in.
+- Sessions of directory users end after `ldap.session_max_hours` (default 12, at most 24) or the absolute timeout, whichever is shorter. Turning LDAP off, or changing the servers or the CA bundle, revokes them.
+- Every failed sign-in, local or directory, is held until `auth.failure_min_seconds` (default 1.0 s) after it started.
+- Changing the servers or the CA bundle needs the bind password and the admin's own password again; the audit row records the new server URLs. The bind password is write-only, kept in the vault, and never in logs, audit rows or responses.
+- "Test connection" can reach any host and port the engine's network reaches. Accepted: it is admin-only and audited (`ldap_test`), and it returns step results, not response bodies (threat model T18.3).
+
+Fail-closed choices made in Phase 14 (owner decision to confirm):
+
+| Choice | Why |
+| --- | --- |
+| No "directory sign-in is unavailable" banner on the sign-in page | The banner would tell an anonymous visitor which names are local (they still work) |
+| Directory users cannot create API tokens | A token keeps its role for up to 90 days without a group check |
+| "Require MFA for admins" covers directory admins; `ldap.require_mfa` covers every directory user | A directory bind cannot carry the directory's own MFA |
+| A directory outage is audited but not counted toward lockout | Shared client IPs would otherwise lock the local admins out too |
+| Only local admins count for "keep one active admin" | A directory admin can lose the role at the next sign-in |
+| `parsemaxxing admin reset` resets local accounts only; a directory name equal to a local name is refused | No merge of a directory entry into a local account |
+
+Design as written in Phase 11:
 
 - Library `ldap3`. LDAPS (636) or StartTLS required; plain LDAP refused. Certificate validated against an uploaded CA bundle; hostname checked.
 - **Config (admin, in the UI):** servers (ordered, failover), bind DN and password (vault), user search base and filter template, username attribute (`sAMAccountName`, `uid`, `userPrincipalName`), group search base, group membership mode (`memberOf`, group `member` search, or AD nested groups via `LDAP_MATCHING_RULE_IN_CHAIN`), group DN → role mapping, timeouts, page size.

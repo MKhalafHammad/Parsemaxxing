@@ -41,3 +41,4 @@ class AuthError(Exception):
     def __init__(self, status: int, message: str, retry_after: int = 0):
         super().__init__(message)
         self.status, self.message, self.retry_after = status, message, retry_after
+        self.pad_until = 0.0  # monotonic time a failed sign-in is held until (auth.service)

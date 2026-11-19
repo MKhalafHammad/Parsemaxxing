@@ -62,6 +62,26 @@ test("a wrong password shows one generic message", async ({ page }) => {
   await expect(page).toHaveURL(/\/login$/); // no redirect loop on the login's own 401
 });
 
+test("a slow failed sign-in shows a busy button and sends one request", async ({ page }) => {
+  await page.route("**/api/engine/setup", (r) => r.fulfill({ json: { needed: false } }));
+  let calls = 0;
+  await page.route("**/api/engine/auth/login", async (r) => {
+    calls++;
+    await new Promise((done) => setTimeout(done, 1000)); // the engine's minimum for a failure
+    await r.fulfill(envelope(401, LOGIN_FAILED));
+  });
+  await page.goto("/login");
+  await page.getByLabel("User name").fill("nobody");
+  await page.getByLabel("Password", { exact: true }).fill("wrong");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  const busy = page.getByRole("button", { name: "Signing in…" });
+  await expect(busy).toBeDisabled();
+  await page.getByLabel("Password", { exact: true }).press("Enter");
+  await expect(page.getByRole("main").getByRole("alert")).toContainText(LOGIN_FAILED);
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
+  expect(calls).toBe(1);
+});
+
 test("a locked-out sign-in says how long to wait", async ({ page }) => {
   await page.route("**/api/engine/setup", (r) => r.fulfill({ json: { needed: false } }));
   await page.route("**/api/engine/auth/login", (r) => r.fulfill({ ...envelope(429, "Too many attempts. Try again in 2 minutes."), headers: { "Retry-After": "120" } }));

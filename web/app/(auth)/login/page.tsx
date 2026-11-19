@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 
 import { Field, FormError, formValues, PasswordField } from "@/components/auth/fields";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ function Login() {
   const next = params.get("next");
   const [error, setError] = useState<string | Error>("");
   const [busy, setBusy] = useState(false);
+  const sending = useRef(false); // a failed sign-in takes at least 1 s: one request at a time
 
   useEffect(() => {
     api<{ needed: boolean }>("/setup")
@@ -23,6 +24,8 @@ function Login() {
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (sending.current) return;
+    sending.current = true;
     const v = formValues(e);
     setBusy(true);
     setError("");
@@ -32,6 +35,7 @@ function Login() {
     } catch (err) {
       setError(err as Error);
       setBusy(false);
+      sending.current = false;
     }
   }
 
@@ -45,7 +49,7 @@ function Login() {
           Your session ended. Sign in again; you will return to this page.
         </p>
       )}
-      <form onSubmit={submit} className="grid gap-4">
+      <form onSubmit={submit} aria-busy={busy} className="grid gap-4">
         <Field id="username" label="User name" autoComplete="username" required maxLength={128} autoCapitalize="none" spellCheck={false} />
         <PasswordField id="password" label="Password" autoComplete="current-password" />
         <FormError error={error} />

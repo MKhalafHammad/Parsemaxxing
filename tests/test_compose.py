@@ -131,7 +131,11 @@ def test_every_image_is_pinned_by_digest() -> None:
         if "build" in svc:
             continue
         assert DIGEST.match(svc["image"]), name
-    for dockerfile in ("engine/Dockerfile", "web/Dockerfile"):
+    for dockerfile in (
+        "engine/Dockerfile",
+        "web/Dockerfile",
+        "engine/tests/auth/openldap/Dockerfile",
+    ):
         for line in (ROOT / dockerfile).read_text().splitlines():
             if line.startswith("FROM "):
                 assert DIGEST.match(line.split()[1]), line

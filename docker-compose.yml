@@ -255,7 +255,7 @@ services:
   # localhost), HTTPS_PORT the published port (default 8443); PMX_TLS is "internal" (Caddy's own
   # CA, kept in the caddy-data volume) or "/certs/<cert>.pem /certs/<key>.pem" for an admin
   # certificate in ./certs. A non-loopback HTTPS_BIND exposes the UI beyond this machine before
-  # the Phase 14 hardening; `make up` refuses it unless PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes.
+  # Phases 12 to 14 are reviewed and merged; `make up` refuses it unless PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes.
   https:
     profiles: [https]
     image: caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5

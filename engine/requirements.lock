@@ -508,6 +508,10 @@ jiter==0.18.0 \
     --hash=sha256:fe42726d7fe171cd8fc1966d4457a6aae03bd408d519d2cc5e7726805460b51e \
     --hash=sha256:feadebdfee32c61e91066433f4aa74c891752e26e43032c1feef08dda6d9b6ed
     # via openai
+ldap3==2.9.1 \
+    --hash=sha256:5869596fc4948797020d3f03b7939da938778a0f9e2009f7a072ccf92b8e8d70 \
+    --hash=sha256:f3e7fc4718e3f09dda568b57100095e0ce58633bcabbed8667ce3f8fbaa4229f
+    # via parsemaxxing (engine/pyproject.toml)
 openai==3.45.0 \
     --hash=sha256:6cff2b5c7b463123fcb94d1bb7e4920e5fab9bb3ed4f837faa0d0bf1d6d6ea3b \
     --hash=sha256:b63aa90e3b7b57b501f2bba231a17976618aa133f457562ad84a5c6431fd0425
@@ -602,6 +606,12 @@ psycopg-binary==3.3.8 ; implementation_name != 'pypy' \
     --hash=sha256:fc9b9922899a3ca6193fd1d96920329c10acb72d3fad0dbc87b1ecdd8a791c14 \
     --hash=sha256:fe26e72b87ca280e538f4f78d1a956df0ae6ed51aab73ccc4c1dcf6f25256438
     # via psycopg
+pyasn1==0.6.5 \
+    --hash=sha256:4017b0fce125096b8573b39c989fdb1a4b19cf761e683398184550fea0e66587 \
+    --hash=sha256:6b11616a6bcf3a40e635f082bb232fa57b5e0dd7f517bd7ddd69ec3794508a47
+    # via
+    #   parsemaxxing (engine/pyproject.toml)
+    #   ldap3
 pycparser==3.12 ; implementation_name != 'PyPy' \
     --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e \
     --hash=sha256:f03387877eab82ce01bbdfd0ba7252ee55a90b1c708d5129e2ce915475cf1db6

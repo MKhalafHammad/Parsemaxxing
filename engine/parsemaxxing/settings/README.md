@@ -2,7 +2,7 @@
 
 The settings service (design 7.5): typed, versioned setting groups per scope, with history, job snapshots, environment-variable overrides and export/import.
 
-Status: built (Phase 12): `model.py` (scopes, group base, `setting()`), `groups.py` (`llm`, `splunk`, `ingest`, `run`, `backup`), `service.py`; tables `settings_groups`, `settings_history`, `settings_snapshots` in migration 006. Wired: bootstrap `config.runtime()` builds the engine's `config.Settings` from `llm`, `ingest`, `run` (platform) and `splunk` (environment `lab`, the one v1 environment until Phase 17), with secrets as vault references; `parsemaxxing settings import-env [--env-file .env] [--dry-run]` imports a v1 `.env` once (idempotent, shows a diff, lists the variables that can then be removed). Settings are read at process start (a change applies on restart); per-job snapshots by hash are planned. 001's `settings` table (kill switch) is separate.
+Status: built (Phase 12): `model.py` (scopes, group base, `setting()`), `groups.py` (`llm`, `splunk`, `ingest`, `run`, `backup`, `auth` (Phase 13), `ldap` (Phase 14)), `service.py`; tables `settings_groups`, `settings_history`, `settings_snapshots` in migration 006. Wired: bootstrap `config.runtime()` builds the engine's `config.Settings` from `llm`, `ingest`, `run` (platform) and `splunk` (environment `lab`, the one v1 environment until Phase 17), with secrets as vault references; `parsemaxxing settings import-env [--env-file .env] [--dry-run]` imports a v1 `.env` once (idempotent, shows a diff, lists the variables that can then be removed). Settings are read at process start (a change applies on restart); per-job snapshots by hash are planned. 001's `settings` table (kill switch) is separate.
 
 ## Interface
 

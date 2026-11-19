@@ -9,7 +9,7 @@ Root rules in [../CLAUDE.md](../CLAUDE.md) apply. Design: [../docs/design.md](..
 - Plain Python, no agent framework (design decision). A new library needs a line in the design doc's tech stack table with the reason.
 
 ## Structure
-- One package: `parsemaxxing`. Built modules: `api`, `orchestrator`, `agents`, `tools`, `guardrails`, `validator`, `ta_builder`, `ledger`, `cim_spec`, `generator`, `settings`, `secrets`, `auth` (local accounts; LDAP planned, Phase 14); bootstrap is `config.py`. Planned: `environments`, `deploy`, `discovery`, `drift`, `routing`, `knowledge`, `masking`, `analytics`, `llm`, `ta_store`.
+- One package: `parsemaxxing`. Built modules: `api`, `orchestrator`, `agents`, `tools`, `guardrails`, `validator`, `ta_builder`, `ledger`, `cim_spec`, `generator`, `settings`, `secrets`, `auth` (local accounts and LDAP); bootstrap is `config.py`. Planned: `environments`, `deploy`, `discovery`, `drift`, `routing`, `knowledge`, `masking`, `analytics`, `llm`, `ta_store`.
 - Pydantic models for every agent output, tool-call argument, API body and config object. Validate at the boundary; inside, trust the types.
 - Never hardcode URLs, model names, tokens or passwords.
 
@@ -43,3 +43,4 @@ Root rules in [../CLAUDE.md](../CLAUDE.md) apply. Design: [../docs/design.md](..
 ## Tests
 - Every new branch of logic has a test. Every guardrail has an adversarial test that tries to bypass it.
 - Tests use only synthetic data from `parsemaxxing/generator/fixtures/`. Tests on `samples-local/` data are marked `local_only` and skipped in CI.
+- Tests that need a real OpenLDAP container are marked `ldap_integration` (docker; skipped without it, required in CI with `PARSEMAXXING_LDAP_IT=1`). See [tests/README.md](tests/README.md).

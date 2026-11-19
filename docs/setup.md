@@ -1,6 +1,6 @@
 # Setup
 
-Every step from an empty machine to an approved add-on, then configuration, usage, tests and troubleshooting. Steps 1 to 7 were tested on a fresh Ubuntu 26.04 VM with v1; the Phase 12 additions (Docker secrets, the KEK, settings import, backups, the `https` profile) and the Phase 13 additions (the first admin, sign-in, MFA, API tokens) are described from the code and its tests. The commands are for Ubuntu; on other systems, install the same tools your usual way.
+Every step from an empty machine to an approved add-on, then configuration, usage, tests and troubleshooting. Steps 1 to 7 were tested on a fresh Ubuntu 26.04 VM with v1; the Phase 12 additions (Docker secrets, the KEK, settings import, backups, the `https` profile) the Phase 13 additions (the first admin, sign-in, MFA, API tokens) and the Phase 14 LDAP sign-in are described from the code and its tests. The commands are for Ubuntu; on other systems, install the same tools your usual way.
 
 A first-run setup wizard in the web UI is **planned** (Phase 15). Until then, setup is the command line below.
 
@@ -26,6 +26,7 @@ A first-run setup wizard in the web UI is **planned** (Phase 15). Until then, se
 - [Settings and secrets](#settings-and-secrets)
 - [Backups](#backups)
 - [HTTPS](#https)
+- [LDAP](#ldap)
 - [Usage](#usage)
 - [Running tests and security checks](#running-tests-and-security-checks)
 - [Project structure](#project-structure)
@@ -270,7 +271,7 @@ The run ends as `done`, and the add-on appears in the TA registry.
 Splunk Web is at http://localhost:8000 (user `admin`, password `SPLUNK_PASSWORD` from `.env`).
 
 > [!IMPORTANT]
-> **The web UI and Splunk Web open only on the machine running Parsemaxxing, not from another machine.** This is a security choice: sign-in and roles are built (Phase 13), but exposure beyond localhost waits for the Phase 14 hardening, so every port is bound to `127.0.0.1`, and the UI accepts only `localhost:3000` and `127.0.0.1:3000` (plus the `https` profile's host name, [HTTPS](#https)). Use a browser on that same machine.
+> **The web UI and Splunk Web open only on the machine running Parsemaxxing, not from another machine.** This is a security choice: sign-in, roles (Phase 13) and LDAP (Phase 14) are built but still in review, so every port is bound to `127.0.0.1`, and the UI accepts only `localhost:3000` and `127.0.0.1:3000` (plus the `https` profile's host name, [HTTPS](#https)). Use a browser on that same machine.
 
 ## Messages that are safe to ignore
 
@@ -335,7 +336,7 @@ LLM_API_KEY=<key your server expects, or any placeholder if none>
 
 Nothing else changes, and sample logs never leave your network. Put the key in `LLM_API_KEY`, never in the URL: a base URL with a user name or password (`https://user:pass@...`) is refused. If you already imported your `.env` into the settings store, run the import again after the change ([Settings and secrets](#settings-and-secrets)).
 
-**Serving the UI on the network, outside Docker.** Start the UI with `HOSTNAME=0.0.0.0` (set it explicitly: shells often set `HOSTNAME` to the machine's name) and add the server's address to `ALLOWED_HOSTS` and `WEB_ORIGINS` (see the note at the end of [.env.example](../.env.example)), then open the port in the server's firewall. With firewalld, `sudo firewall-cmd --add-port=3000/tcp --permanent` changes only the saved rules: run `sudo firewall-cmd --reload` to apply them. Every route needs a sign-in, but exposure beyond localhost is not supported before Phase 14, and over plain http on a host name other than `localhost` browsers drop the `__Host-` session cookie: use https there.
+**Serving the UI on the network, outside Docker.** Start the UI with `HOSTNAME=0.0.0.0` (set it explicitly: shells often set `HOSTNAME` to the machine's name) and add the server's address to `ALLOWED_HOSTS` and `WEB_ORIGINS` (see the note at the end of [.env.example](../.env.example)), then open the port in the server's firewall. With firewalld, `sudo firewall-cmd --add-port=3000/tcp --permanent` changes only the saved rules: run `sudo firewall-cmd --reload` to apply them. Every route needs a sign-in, but exposure beyond localhost is not supported until Phases 12 to 14 are reviewed and merged, and over plain http on a host name other than `localhost` browsers drop the `__Host-` session cookie: use https there.
 
 ## Settings and secrets
 
@@ -403,10 +404,59 @@ The optional `https` profile puts Caddy in front of the web UI with TLS and HSTS
 | `COMPOSE_PROFILES` | unset | `https` turns the proxy on |
 | `PMX_PUBLIC_HOST` | `localhost` | The host name the browser uses; the web UI accepts it with and without the port |
 | `HTTPS_PORT` | `8443` | The published port |
-| `HTTPS_BIND` | `127.0.0.1` | The host address it listens on. Sign-in is built (Phase 13), but exposure beyond localhost waits for the Phase 14 hardening, so `make up` refuses any address other than loopback unless you also set `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes` in your shell to accept that risk |
+| `HTTPS_BIND` | `127.0.0.1` | The host address it listens on. Sign-in (Phase 13) and LDAP (Phase 14) are built but still in review, so `make up` refuses any address other than loopback unless you also set `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes` in your shell to accept that risk |
 | `PMX_TLS` | `internal` | `internal` (Caddy's own CA, kept in the `caddy-data` volume; browsers warn until you trust it) or `/certs/<cert>.pem /certs/<key>.pem` for your own certificate in `./certs` |
 
 Then `make up` and open `https://<PMX_PUBLIC_HOST>:8443`. The engine and the web UI accept state changes only from the origins docker-compose puts in `WEB_ORIGINS` (`http://localhost:3000`, `http://127.0.0.1:3000` and `https://<PMX_PUBLIC_HOST>` with and without `:8443`). Caddy sends the `pmx_proxy_hop` secret as `X-Pmx-Hop` and replaces any value a client sends, so the web UI passes the client's address on to the engine (for lockout per IP and the audit log) only for requests that came through Caddy.
+
+## LDAP
+
+Directory users can sign in with their directory user name and password; their directory groups decide their role. Built in Phase 14 (in review). An admin sets it up under **Settings > Authentication and LDAP** (`/settings/authentication`). Viewers cannot see these settings.
+
+**What you need first**
+
+- An LDAPS endpoint (`ldaps://`, usually port 636), or an LDAP endpoint that supports StartTLS. Plain LDAP is refused.
+- The CA certificate (PEM) that signed the directory servers' certificates. Only the bundle you upload is trusted, the server's host name must match its certificate, and TLS 1.2 is the minimum.
+- A service account with read access to the users and groups, for example `cn=svc-parsemaxxing,ou=service,dc=acme,dc=example`, and its password (the bind password).
+- Your own local admin password. You type it again when you change the servers or the CA bundle.
+
+**Order of the steps**
+
+1. **Upload the CA bundle** with the bind password. The bind password is write-only: it goes into the vault and is never shown again, here or anywhere, and never written to logs or the audit log.
+2. **Add the servers** in the order to try them, for example `ldaps://ldap1.acme.example:636`, then `ldap://ldap2.acme.example:389` with StartTLS on. Save with the bind password and your own password. If a server cannot be reached (network or TLS), the next one is tried; a refused password is an answer and is not retried elsewhere. Failover never falls back to plain LDAP.
+3. **Fill in the search settings:** the bind DN, the user search base (for example `ou=people,dc=acme,dc=example`), the user filter, the user name attribute and the display name attribute.
+4. **Choose the membership mode** and, except for `memberOf`, the group search base (for example `ou=groups,dc=acme,dc=example`).
+5. **Map groups to roles.** At least one mapping is needed.
+6. **Test connection**, then **Test a user lookup** with a real directory user name.
+7. Turn on **Let directory users sign in** and save.
+
+Changing the servers or the CA bundle signs every directory user out, and so does turning LDAP off. The audit log records the new server URLs.
+
+**User filter.** One parenthesised filter with `{username}` 1 to 4 times. Parsemaxxing escapes what the user types (RFC 4515) before it goes into the filter. The search must find exactly one entry, otherwise sign-in fails.
+
+| Directory | User filter | User name attribute |
+| --- | --- | --- |
+| OpenLDAP | `(uid={username})` (default) | `uid` |
+| Active Directory, short name | `(&(objectClass=user)(sAMAccountName={username}))` | `sAMAccountName` |
+| Active Directory, `user@acme.example` | `(userPrincipalName={username})` | `userPrincipalName` |
+
+**Membership modes**
+
+| Mode | What it reads | Group search base |
+| --- | --- | --- |
+| `memberOf` on the user | The user's `memberOf` values | Not needed |
+| `member` on the group | Groups under the group search base whose `member` holds the user's DN. With **Follow groups inside groups**, groups in groups up to 8 levels and 1000 groups | Needed |
+| Active Directory nested groups | Every group the user is in, directly or through other groups (`LDAP_MATCHING_RULE_IN_CHAIN`). Tested against a mock only, not a real Active Directory | Needed |
+
+**Group to role mapping.** Each row is a group DN and a role, for example `cn=pmx-admins,ou=groups,dc=acme,dc=example` → Admin and `cn=soc-analysts,ou=groups,dc=acme,dc=example` → Viewer. A user in several mapped groups gets the highest role. **A user in no mapped group cannot sign in.** The role is read again at every sign-in, and a directory session lasts at most **Directory session length** (`ldap.session_max_hours`, default 12 hours, at most 24) or the absolute timeout, whichever is shorter. So a group removal takes effect at the next sign-in, or at the end of that time.
+
+**Tests.** Test connection shows each step per server: connect, TLS, certificate, bind. Test a user lookup shows the DN found, the mapped groups matched and the resulting role, never any other attribute or a password. Both use the saved settings and are written to the audit log.
+
+**MFA.** "Require MFA for admins" also covers directory admins. **Require MFA for directory users** makes every directory user enrol TOTP in Parsemaxxing.
+
+**What directory users cannot do.** Create API tokens (a token would keep its role up to 90 days without a group check), change a password in Parsemaxxing, or have their role set by hand. A directory user name equal to a local account's name is refused. `parsemaxxing admin reset` resets local accounts only.
+
+**Break-glass.** A user name that is a local account is always checked locally and never sent to the directory, so local admins can sign in while the directory is down. Keep at least one local admin with MFA. Only local admins count for "keep one active admin". The sign-in page does not say the directory is down (that would show which names are local); a directory outage is in the audit log and does not count toward lockout.
 
 ## Usage
 
@@ -442,6 +492,7 @@ make security  # bandit, semgrep, pip-audit, npm audit, gitleaks over full git h
 | `make sbom` | CycloneDX SBOM per built image into `sbom/` (Syft) |
 | `make scan` | Trivy scan of the built images, failing on fixable HIGH or CRITICAL findings (`.trivyignore` holds reviewed exceptions) |
 | `make backup`, `make restore`, `make restore-test` | [Backups](#backups) |
+| `make ldap-test` | The LDAP integration tests against a real OpenLDAP container built from `engine/tests/auth/openldap/` (needs Docker; fails instead of skipping without it). `make test` leaves them out |
 
 `make setup` creates `.env` and `secrets/` first, so it needs Docker running.
 
@@ -452,7 +503,7 @@ brew install gitleaks          # or: go install github.com/zricethezav/gitleaks/
 pipx install semgrep           # kept out of the project venv to avoid dependency clashes
 ```
 
-CI runs `make lint`, `make test` and `make security` on every pull request and on pushes to `main`, plus two more jobs: `images` (builds the engine and web images, keeps an SBOM per image as an artifact for 30 days, runs the Trivy scan) and `restore-test`. Any failure fails the build.
+CI runs `make lint`, `make test` and `make security` on every pull request and on pushes to `main`, plus three more jobs: `images` (builds the engine and web images, keeps an SBOM per image as an artifact for 30 days, runs the Trivy scan), `restore-test` and `ldap-test`. Any failure fails the build.
 
 ## Project structure
 
@@ -470,7 +521,7 @@ CI runs `make lint`, `make test` and `make security` on every pull request and o
 │   │   ├── ledger/          PostgreSQL job queue, append-only hash-chained ledger, encrypted backups (built)
 │   │   ├── settings/        typed, versioned settings with history and import (built)
 │   │   ├── secrets/         the vault: AES-256-GCM envelope encryption under the KEK (built)
-│   │   ├── auth/            local accounts, sessions, MFA, API tokens, route policy, audit (built; LDAP planned)
+│   │   ├── auth/            local accounts, sessions, MFA, API tokens, route policy, audit, LDAP (built)
 │   │   ├── cim_spec/        CIM 8.7.0 required fields and allowed values, pinned from Splunk_SA_CIM (built)
 │   │   └── generator/       synthetic logs in four formats + truth manifests; fixtures/ (built)
 │   └── tests/               engine tests
@@ -512,6 +563,9 @@ CI runs `make lint`, `make test` and `make security` on every pull request and o
 - **The setup page says the token is not valid.** Tokens last 60 minutes and work once. Run `make setup-token` for a new one.
 - **Signing in returns to the sign-in page.** The browser dropped the `__Host-pmx_session` cookie. Safari does this on plain `http://localhost`, and every browser does it on plain http with another host name: use Chromium, Chrome, Edge or Firefox on `http://localhost:3000`, or the [`https` profile](#https).
 - **"Too many attempts. Try again in N minutes."** 5 failures for one user name, or 20 from one IP, lock sign-in for 60 seconds, doubling up to 15 minutes. Wait, or clear it with `parsemaxxing admin reset <user name>` ([Create the first admin](#create-the-first-admin)). Anyone can lock a known user name this way for up to 15 minutes (threat model R23).
+- **"Enter the bind password again when you change servers or the CA bundle."** Changing either needs the bind password and your own password in the same save ([LDAP](#ldap)).
+- **Test connection fails at the certificate step.** The server's certificate does not chain to the uploaded CA bundle, or its host name does not match the server URL. Upload the right CA, or use the host name the certificate names.
+- **A directory user gets "Sign-in failed".** Run Test a user lookup with that name. "Not found" or more than one entry: fix the user search base or the filter. Found but no role: add one of the user's groups to the mapping. The audit log records the reason (for example `not_found`, `ambiguous` or `no_group`).
 - **`no API token: set PARSEMAXXING_API_TOKEN or pass --token-file`.** Create a token ([API token for the CLI](#api-token-for-the-cli)). A token file readable by group or others, or a link, is refused.
 - **`make first-run` or a `demo/` script fails with HTTP 401 or asks for `PARSEMAXXING_API_TOKEN`.** Create an admin API token under Settings > API tokens, save it with mode 0600, and `export PARSEMAXXING_API_TOKEN=$(cat ~/.pmx-token)`.
 - **Meta API errors:**

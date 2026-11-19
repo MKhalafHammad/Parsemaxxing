@@ -69,7 +69,7 @@ export default function SecurityPage() {
       <div>
         <h1 className="text-xl font-semibold">Account security</h1>
         <p className="text-sm text-muted">
-          Signed in as <span className="font-mono">{me.user.username}</span> ({me.user.role === "admin" ? "Admin" : "Viewer"}, {me.user.source === "local" ? "local account" : me.user.source}).
+          Signed in as <span className="font-mono">{me.user.username}</span> ({me.user.role === "admin" ? "Admin" : "Viewer"}, {me.user.source === "local" ? "local account" : me.user.source === "ldap" ? "directory account" : me.user.source}).
         </p>
       </div>
       <p role="status" aria-live="polite" className="text-sm text-good empty:hidden">
@@ -132,7 +132,7 @@ export default function SecurityPage() {
             </form>
             {/* The engine refuses it for admins while MFA is required; older engines omit the flag. */}
             {(me.mfa_required ?? me.user.role === "admin") ? (
-              <p className="mt-2 text-sm text-muted">MFA is required for admins.</p>
+              <p className="mt-2 text-sm text-muted">{me.user.role === "admin" ? "MFA is required for admins." : "MFA is required for directory users."}</p>
             ) : (
               <Button variant="destructive" className="mt-2 justify-self-start" onClick={() => setDialog("disable")}>
                 Turn off MFA…

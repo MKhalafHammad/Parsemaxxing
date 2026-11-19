@@ -53,7 +53,7 @@ StoreDep = Annotated[db.Store, Depends(get_store)]
 
 def auth_for(request: Request, store: db.Store) -> Auth:
     settings = SettingsService(store.conn, request.app.state.environ).get(AuthSettings, PLATFORM)
-    return Auth(store.conn, settings, request.app.state.kek)
+    return Auth(store.conn, settings, request.app.state.kek, request.app.state.environ)
 
 
 def client_ip(request: Request) -> str:

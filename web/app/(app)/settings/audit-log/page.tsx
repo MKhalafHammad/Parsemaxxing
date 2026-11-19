@@ -37,6 +37,9 @@ const EVENTS: Record<string, string> = {
   setup: "First-run setup",
   setup_token_issued: "Setup token issued",
   admin_reset: "Break-glass reset",
+  ldap_settings_change: "LDAP settings changed",
+  ldap_ca_bundle: "LDAP CA bundle uploaded",
+  ldap_test: "LDAP test",
 };
 
 function Outcome({ outcome }: { outcome: string }) {

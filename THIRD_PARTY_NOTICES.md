@@ -17,6 +17,7 @@ Parsemaxxing's own code is under the PolyForm Shield License 1.0.0 (see `LICENSE
 | cryptography | Apache-2.0 OR BSD-3-Clause |
 | argon2-cffi (with argon2-cffi-bindings) | MIT |
 | pyotp | MIT |
+| ldap3 (with pyasn1, BSD-2-Clause) | LGPL-3.0-or-later (used unmodified as a separate library) |
 | hatchling (build backend, in the image) | MIT |
 
 The common-password list in `engine/parsemaxxing/auth/common_passwords.txt` is not a third-party file: it was compiled for this project from widely published common-password patterns (keyboard walks, digit runs, common words with years and digits), no published list was copied, and it is under the project's own licence.

@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 
-import { DIFF_MARKERS, expect, LEDGER, mockRun, run, signedInAs, test, user, XSS } from "./fixtures";
+import { DIFF_MARKERS, expect, LEDGER, ldapCert, ldapView, mockRun, run, signedInAs, test, user, XSS } from "./fixtures";
 
 function watchDialogs(page: Page): string[] {
   const dialogs: string[] = [];
@@ -222,6 +222,33 @@ test("account, users, tokens and audit strings render as text", async ({ page })
   await expect(page.getByRole("table", { name: "Audit log" })).toContainText(JSON.stringify({ reason: XSS }));
   await nothingInjected(page, dialogs);
   expect(await page.locator("header script, header img").count()).toBe(0);
+});
+
+test("directory strings (DN, groups, certificates, test details) render as text", async ({ page }) => {
+  const dialogs = watchDialogs(page);
+  const xcert = { ...ldapCert(XSS), issuer: XSS };
+  await page.route("**/api/engine/auth/ldap", (r) =>
+    r.fulfill({ json: ldapView({ ca_bundle: [xcert], local_admins: [XSS], missing_for_enable: [XSS] }, { bind_dn: XSS, user_search_base: XSS, group_roles: { [XSS]: "admin" } }) }),
+  );
+  await page.route("**/api/engine/auth/ldap/test-connection", (r) =>
+    r.fulfill({ json: { ok: false, servers: [{ url: XSS, ok: false, steps: [{ step: XSS, ok: false, detail: XSS }, { step: "certificate", ok: true, detail: XSS, certificate_info: xcert }] }] } }),
+  );
+  await page.route("**/api/engine/auth/ldap/test-user-lookup", (r) => r.fulfill({ json: { ok: false, found: 1, dn: XSS, matched_groups: [XSS], role: null, message: XSS } }));
+  await page.goto("/settings/authentication");
+  await expect(page.getByLabel("Bind DN")).toHaveValue(XSS);
+  await expect(page.getByLabel("Group 1 DN")).toHaveValue(XSS);
+  await expect(page.getByRole("table", { name: "CA certificates" })).toContainText(XSS);
+  await expect(page.locator("#ldap-missing")).toContainText(XSS);
+  await page.getByRole("button", { name: "Test connection" }).click();
+  await expect(page.getByRole("group", { name: "Server 1 test" })).toContainText(XSS);
+  await page.getByLabel("User name to look up").fill(XSS);
+  await page.getByRole("button", { name: "Test a user lookup" }).click();
+  await expect(page.getByRole("group", { name: "Lookup result" })).toContainText(XSS);
+  await page.route("**/api/engine/auth/ldap", (r) => r.fulfill({ status: 422, json: { error: { code: "invalid", message: `Invalid LDAP settings: bind_dn: ${XSS}`, request_id: XSS } } }));
+  await page.getByLabel("Bind DN").fill("cn=x,dc=example,dc=com");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByLabel("Bind DN")).toHaveAccessibleDescription(new RegExp(XSS.replace(/[()[\]]/g, "\\$&").slice(0, 20)));
+  await nothingInjected(page, dialogs);
 });
 
 test("sign-in and MFA errors from the engine render as text", async ({ page }) => {
