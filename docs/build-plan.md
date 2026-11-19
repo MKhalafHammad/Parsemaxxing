@@ -24,7 +24,7 @@ Updated at the end of every phase.
 | 11 | Foundation: tag, rename, licence, cleanup, v2 design and security docs, lab probes | — | In progress | |
 | 12 | Hardened runtime, settings store and vault | — | Built, in review (deferred items listed in the phase) | |
 | 13 | Authentication and RBAC | — | Built, in review (deferred items listed in the phase) | |
-| 14 | LDAP | — | Planned | |
+| 14 | LDAP | — | Built, in review (deferred items listed in the phase) | |
 | 15 | App shell and UX architecture | — | Planned | |
 | 16 | LLM providers and per-agent models | — | Planned | |
 | 17 | Customers, environments and topology | — | Planned | |
@@ -884,7 +884,7 @@ Each phase builds the design sections it names in [design.md](design.md#v2-platf
 | `jobs.created_by` | Built |
 | Screens | Built: sign in, MFA, recovery code, setup, MFA enrolment, account security, API tokens, users, audit log, `<AdminOnly>`. UX review must-fixes (Turn off MFA hidden while MFA is required, "Sign in as someone else" on the MFA, recovery and enrolment steps, times with a named zone) are in the working tree; the kill-switch control is Phase 16 |
 | Trusted proxy | Built: the engine trusts `X-Forwarded-For` only from the web container; the web container forwards it only when the `https` proxy's `X-Pmx-Hop` secret matches |
-| Exposure beyond localhost | Not lifted: `make up` still refuses a non-loopback `HTTPS_BIND` until Phase 14 |
+| Exposure beyond localhost | Not lifted: `make up` still refuses a non-loopback `HTTPS_BIND` (see Phase 14) |
 | End-to-end test against a real engine | Deferred: the Playwright tests mock the engine |
 
 ### Deliverables
@@ -928,6 +928,22 @@ Each phase builds the design sections it names in [design.md](design.md#v2-platf
 
 **Goal:** directory users log in with their directory groups mapped to `viewer` or `admin`, safely (7.4).
 **Owners:** `identity`, `frontend`.
+
+### Status (Nov 20, 2026: built, in review)
+
+| Deliverable | Status |
+| --- | --- |
+| `ldap3` client, LDAPS or StartTLS only, CA bundle, hostname check | Built: `ldap3` 2.9.1 (last release 2021; `pyasn1` pinned `<0.7`, revisit in the design's tech-stack table). Only the uploaded CA bundle is trusted, TLS 1.2 minimum, plain LDAP refused in the settings and before any bind, no fallback to plain on failover |
+| Admin config screen | Built: `/settings/authentication`. Changing the servers or the CA bundle needs the bind password and the admin's own password again; the bind password is write-only (vault) |
+| Login flow | Built: RFC 4515 escaping of every `{username}` (1 to 4 per filter); empty, control-character and SASLprep-failing passwords refused before any connection; exactly one entry (a size-limit stop counts as more); highest mapped role; no mapped group, no access. Directory rows bound to `entryUUID`, `objectGUID` or the DN. Failed sign-ins held to `auth.failure_min_seconds` (1.0 s) |
+| Group modes | Built: `member_of`, `member` (recursive: cycle guard, 8 levels, 1000 groups) and `ad_nested`. `ad_nested` is tested against a mock only |
+| Test connection, Test a user lookup | Built: step results only; the lookup returns DN, matched groups and role. Test connection can probe engine-network ports (admin-only, audited; threat model T18.3) |
+| Optional TOTP, break-glass | Built: `ldap.require_mfa` for every directory user; "require MFA for admins" covers directory admins. Local names never touch the directory |
+| Group change takes effect | Built: role re-evaluated at every sign-in; directory sessions capped at `ldap.session_max_hours` (12); turning LDAP off or changing servers or CA revokes them |
+| OpenLDAP tests in CI | Built: 23 tests in CI job `ldap-test` (`make ldap-test`), image from a digest-pinned Debian base with `slapd` (the apt package version is not pinned) |
+| Fail-closed choices | Built, owner decision to confirm: no "directory down" banner on sign-in, no API tokens for directory users, MFA rules cover directory users, directory outages not counted toward lockout, only local admins count for the last-admin rule, a directory name equal to a local name refused (design 7.4) |
+| Exposure beyond localhost | Not lifted: `make up` still refuses a non-loopback `HTTPS_BIND` unless `PMX_ALLOW_UNAUTHENTICATED_NETWORK=yes` is set |
+| OWNER ACTION: lab directory test | Not done yet |
 
 ### Deliverables
 - `ldap3` client, LDAPS or StartTLS only, CA bundle upload, hostname check.

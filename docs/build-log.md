@@ -543,3 +543,19 @@ One entry per completed phase, appended at the end of the phase (see CLAUDE.md, 
 - UX review must-fixes (Turn off MFA hidden while MFA is required, "Sign in as someone else" on the MFA, recovery and enrolment steps, times with a named zone) are in the working tree with tests, not yet committed at the time of this entry.
 - `make first-run` and the `demo/` scripts now send an admin API token from `PARSEMAXXING_API_TOKEN`; without one they stop with a message.
 - Exposure beyond localhost still refused until Phase 14. New residual risks: lockout of a named account for up to 15 minutes (R23), the audit log shows sign-in IPs to viewers (R24, owner decision to confirm), no idle warning (R25). R1 and R10 closed.
+
+## 2026-11-20 — Phase 14: LDAP (in review)
+
+**Done**
+- Directory sign-in with `ldap3` 2.9.1: LDAPS or StartTLS only, only the uploaded CA bundle trusted, host name checked, TLS 1.2 minimum; ordered servers with failover on transport errors only, never to plain LDAP. RFC 4515 escaping of every `{username}`; exactly one entry (a size-limit stop counts as more); empty, control-character and SASLprep-failing passwords refused before any connection.
+- Groups by `member_of`, `member` (recursive: cycle guard, 8 levels, 1000 groups) or `ad_nested`; highest mapped role, no mapped group means no access. Directory rows (migration 008) bound to `entryUUID`, `objectGUID` or the DN; role re-evaluated at each sign-in; directory sessions capped at `ldap.session_max_hours` (12) and revoked when LDAP is turned off or the servers or CA change. Every failed sign-in held to `auth.failure_min_seconds` (1.0 s).
+- Admin screen at `/settings/authentication` with Test connection and Test a user lookup. The bind password is write-only (vault); changing servers or the CA needs it and the admin's own password again, and the audit row records the new server URLs.
+- Fail-closed choices, owner decision to confirm (threat model R29): no "directory down" banner on sign-in, no API tokens for directory users, MFA rules cover directory users, outages not counted toward lockout, only local admins count for the last-admin rule, a directory name equal to a local name refused.
+
+**Test results**
+- LDAP tests: 79 in `auth/test_ldap.py` (mocked directory, in `make test`) and 23 in `auth/test_ldap_integration.py` against a real OpenLDAP (`make ldap-test`, new CI job `ldap-test`; the image uses a digest-pinned Debian base, the `slapd` package version is not pinned).
+- pytest with PostgreSQL: 930 passed, 1 skipped (the `pg_dump | age` round trip); this includes the 23 OpenLDAP integration tests, also run with `make ldap-test` (23 passed). Playwright: 66 passed. bandit, semgrep, pip-audit and npm audit clean.
+
+**Cut or deferred**
+- `ad_nested` is tested against a mock only (R27). `ldap3` is unmaintained since 2021 and `pyasn1` is pinned `<0.7` (R28; replace with `python-ldap` if `pyasn1` 0.7 lands or a CVE appears). Test connection can probe ports on the engine's network (admin-only, audited; R26).
+- Exposure beyond localhost is still refused by `make up` (R1). The owner's test against the lab directory is not done yet.

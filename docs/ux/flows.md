@@ -37,7 +37,7 @@ Acceptance (Phase 15): a new admin completes F1 without docs; the walkthrough is
 What can go wrong and what the user sees:
 - Any failure: one message, "Sign-in failed. Check your user name and password." (no enumeration).
 - Lockout with backoff: "Too many attempts. Try again in 2 minutes." The countdown is text, updated each minute, not a live timer announced every second.
-- LDAP down: same generic message for LDAP users; the login page shows "Directory sign-in is unavailable. Local accounts still work." only when the engine reports the directory down.
+- LDAP down: same generic message for LDAP users. Decision, Phase 14: the sign-in page shows no "Directory sign-in is unavailable" banner, because it would tell an anonymous visitor which names are local (they still work). The outage is in the audit log and not counted toward lockout. Owner to confirm.
 - Recovery code used: after sign-in a banner says "You used a recovery code. 9 are left. [Create new codes]".
 - Idle timeout: 2 minutes before, a non-modal banner "You will be signed out in 2 minutes. [Stay signed in]"; after, `/login?next=` with "Your session ended."
 
@@ -156,6 +156,8 @@ What can go wrong: index outside the allowlist (refused before any search, tenan
 4. Group to role mapping table: group DN → Viewer or Admin; a note "No mapped group means no access."
 5. "Test connection" shows each step (TCP, TLS, certificate, bind) with pass or fail. "Test a user lookup" with a user name: found DN, groups matched, resulting role; never other attributes, never the password.
 6. Save. "Optional: let LDAP users enrol TOTP in Parsemaxxing" toggle.
+
+Decisions, Phase 14 (owner to confirm): the first setup uploads the CA bundle with the bind password, then adds the servers; changing the servers or the CA bundle asks for the bind password and the admin's own password again, and signs directory users out. Directory users cannot create API tokens, "Require MFA for admins" covers directory admins, and "Require MFA for directory users" covers all of them. Only local admins count for "keep one active admin"; a directory name equal to a local name is refused.
 
 What can go wrong: certificate mismatch, bind failure (specific in the test, generic on the login page), more than one entry for the filter ("The filter matched 2 entries. Make it match exactly one."), user in no mapped group ("Found, but no group maps to a role: this user can't sign in.").
 
